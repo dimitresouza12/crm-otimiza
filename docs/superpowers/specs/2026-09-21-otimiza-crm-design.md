@@ -118,6 +118,21 @@ O kanban prioriza leitura operacional: cartões com faixa colorida por etapa, te
 - Webhooks autenticam a conexão e validam empresa antes de processar dados.
 - Conteúdo de mensagem é acessível somente à empresa correspondente e fica sujeito a política de retenção configurável.
 - A aplicação registra alterações de etapa, valor e confirmação de receita com data, ator e origem.
+
+## Planos comerciais
+
+O produto é vendido pela Otimiza AI em reais, por empresa e não por usuário. Cada plano inclui uma franquia de capacidade; números de WhatsApp, usuários, análises e configurações acima do limite são adicionais.
+
+| Plano | Preço mensal | Escopo |
+| --- | ---: | --- |
+| Otimiza CRM Essencial | R$ 89,90 | Dashboard, CRM, leads, conversas, vendas, 1 WhatsApp, até 2 usuários e até 1.000 análises de conversa. |
+| Otimiza CRM Pro | R$ 119,90 | Tudo do Essencial, até 5 usuários, até 5.000 análises, produtos, metas, relatórios completos, Meta Ads e atribuição de campanhas. |
+| Otimiza CRM Chatbot | R$ 179,90 | Tudo do Pro e chatbot visual por regras: menus, palavras-chave, horário, coleta de dados, etiquetas e movimentação de funil. |
+| Otimiza Automação | A partir de R$ 249,90 | Tudo do Chatbot e automação n8n padronizada da Otimiza AI, com configuração operacional da equipe. Fluxos customizados são orçados separadamente. |
+
+O cliente recebe sete dias de teste do plano Pro. O prazo começa quando o WhatsApp estiver conectado ou, no plano com automação, quando a Otimiza AI concluir a ativação. Durante o onboarding são coletados segmento, objetivo principal e o uso atual da automação Otimiza AI.
+
+Custos de mensagens cobrados pela Meta, quando existirem, não fazem parte da mensalidade. A conexão assistida de WhatsApp e a configuração customizada de chatbot podem ser cobradas como serviço de implantação.
 - O onboarding exige que cada empresa mantenha base legal e avisos adequados para o tratamento de dados de seus contatos.
 
 ## Tratamento de falhas
