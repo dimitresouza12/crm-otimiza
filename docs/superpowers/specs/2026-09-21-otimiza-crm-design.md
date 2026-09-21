@@ -24,7 +24,7 @@ Nenhum usuário do cliente recebe token UAZAPI, URL de webhook, credencial n8n o
 ## Navegação do cliente
 
 1. **Dashboard** — primeira aba. Exibe receita confirmada, vendas detectadas, leads, conversão, ticket médio, meta, alertas e visão resumida do tráfego pago.
-2. **CRM** — segunda aba. Quadro kanban do funil com etapas configuráveis. Cada card mostra contato, origem, última interação, valor, responsável, temperatura e próxima ação.
+2. **CRM** — segunda aba. Quadro kanban do funil com etapas configuráveis. Um seletor permite visualizar todos os canais ou um CRM específico. Cada card mostra contato, origem, última interação, valor, responsável, temperatura e próxima ação.
 3. **Leads** — lista e filtros avançados, dados de contato, origem, etiquetas, responsável e histórico de mudanças.
 4. **Conversas** — histórico por lead, com indicação de mensagens recebidas/enviadas e eventos do atendimento. No MVP esta aba é de consulta; envio pelo CRM será fase posterior.
 5. **Vendas** — oportunidades com produto, valor estimado, valor detectado, valor confirmado, motivo de perda e evidência da conversa.
@@ -34,11 +34,28 @@ Nenhum usuário do cliente recebe token UAZAPI, URL de webhook, credencial n8n o
 
 O ambiente administrativo da Otimiza AI terá páginas próprias para Empresas, Conexões WhatsApp, Automações n8n, Contas Meta Ads, Saúde das integrações e Suporte.
 
+## Canais de WhatsApp e CRMs independentes
+
+Uma empresa pode ter vários números de WhatsApp, chamados de canais. Cada canal possui nome, número conectado, responsáveis, horário de atendimento, chatbot e CRM de destino próprios. No plano Pro, a empresa pode manter até três canais ativos.
+
+Exemplo de configuração:
+
+```text
+Empresa
+├─ Comercial → CRM Vendas → Chatbot de qualificação
+├─ Suporte → CRM Pós-venda → Chatbot de dúvidas
+└─ Unidade Centro → CRM Unidade Centro → Chatbot de agendamento
+```
+
+O Dashboard e os relatórios exibem a empresa inteira por padrão, com filtro por canal, CRM, unidade e responsável. A página CRM também permite abrir cada funil isoladamente ou uma visão geral consolidada.
+
+Um contato é único dentro da empresa, normalizado pelo número de telefone. Caso converse em dois canais, seu histórico fica acessível em uma única ficha; as oportunidades, contudo, permanecem separadas no CRM de cada canal para não misturar vendas, suporte e unidades.
+
 ## Jornada de onboarding
 
 1. A equipe Otimiza AI cria a empresa e o primeiro usuário do cliente.
 2. A equipe cria ou seleciona manualmente a instância no painel UAZAPI e realiza o pareamento com o WhatsApp Business.
-3. A equipe vincula a instância à empresa no painel administrativo do CRM e configura a entrega de eventos.
+3. A equipe vincula a instância à empresa no painel administrativo do CRM, define o canal, o CRM de destino e configura a entrega de eventos.
 4. Para clientes com automação, a equipe associa o fluxo n8n e seus eventos comerciais à mesma empresa.
 5. A equipe cadastra produtos, preços, etapas do funil e regras de análise.
 6. Quando o cliente autorizar, conecta sua conta Meta Ads e seleciona a conta de anúncios.
@@ -92,7 +109,8 @@ Cada lead mantém primeiro toque e último toque. Relatórios mostram investimen
 
 - `Empresa`: tenant proprietário de todos os dados do cliente.
 - `Membership`: vínculo entre usuário, empresa e papel.
-- `WhatsAppConnection`: instância UAZAPI vinculada, estado da sessão, apelido e credenciais cifradas no servidor.
+- `CanalWhatsApp`: nome operacional, número conectado, responsáveis, horário e CRM de destino dentro da empresa.
+- `WhatsAppConnection`: instância UAZAPI vinculada a um canal, estado da sessão, apelido e credenciais cifradas no servidor.
 - `Contato`: pessoa identificada pelo número normalizado dentro da empresa.
 - `Conversa` e `Mensagem`: histórico relacionado a contato e conexão.
 - `Funil` e `EtapaFunil`: etapas por empresa; o funil padrão vem pronto, mas pode ser adaptado.
@@ -126,8 +144,8 @@ O produto é vendido pela Otimiza AI em reais, por empresa e não por usuário. 
 | Plano | Preço mensal | Escopo |
 | --- | ---: | --- |
 | Otimiza CRM Essencial | R$ 89,90 | Dashboard, CRM, leads, conversas, vendas, 1 WhatsApp, até 2 usuários e até 1.000 análises de conversa. |
-| Otimiza CRM Pro | R$ 119,90 | Tudo do Essencial, até 5 usuários, até 5.000 análises, produtos, metas, relatórios completos, Meta Ads e atribuição de campanhas. |
-| Otimiza CRM Chatbot | R$ 179,90 | Tudo do Pro e chatbot visual por regras: menus, palavras-chave, horário, coleta de dados, etiquetas e movimentação de funil. |
+| Otimiza CRM Pro | R$ 119,90 | Tudo do Essencial, até 3 WhatsApps e CRMs independentes, até 5 usuários, até 5.000 análises, produtos, metas, relatórios completos, Meta Ads e atribuição de campanhas. |
+| Otimiza CRM Chatbot | R$ 179,90 | Tudo do Pro e chatbot visual por regras configurável por canal: menus, palavras-chave, horário, coleta de dados, etiquetas e movimentação de funil. |
 | Otimiza Automação | A partir de R$ 249,90 | Tudo do Chatbot e automação n8n padronizada da Otimiza AI, com configuração operacional da equipe. Fluxos customizados são orçados separadamente. |
 
 O cliente recebe sete dias de teste do plano Pro. O prazo começa quando o WhatsApp estiver conectado ou, no plano com automação, quando a Otimiza AI concluir a ativação. Durante o onboarding são coletados segmento, objetivo principal e o uso atual da automação Otimiza AI.
