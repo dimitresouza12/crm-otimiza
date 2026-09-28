@@ -8,17 +8,19 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
+  CheckCircle2,
   Clock3,
   Filter,
   Goal,
+  Link2,
   LayoutDashboard,
   MessageCircleMore,
   MoreHorizontal,
-  PanelLeftClose,
   Plus,
   Search,
   Send,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Target,
   TrendingUp,
@@ -182,6 +184,50 @@ function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; e
   return <section className="empty-page panel"><div className="empty-page__icon"><Icon size={24}/></div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p><button className="primary-button" type="button"><Plus size={18}/> Configurar agora</button></section>
 }
 
+function Integrations() {
+  const [provider, setProvider] = useState<'meta' | 'uazapi' | 'ads'>('meta')
+  const [started, setStarted] = useState(false)
+  const detail = {
+    meta: {
+      eyebrow: 'WHATSAPP BUSINESS PLATFORM',
+      title: 'Conecte seu WhatsApp Oficial',
+      text: 'Você autoriza a conexão na sua própria conta Meta. O CRM acompanha conversas, leads e vendas sem responder por conta própria.',
+      action: 'Conectar com a Meta',
+      steps: ['Entre na conta Meta da sua empresa', 'Escolha a conta do WhatsApp Business', 'Selecione o número que deseja acompanhar'],
+    },
+    uazapi: {
+      eyebrow: 'AUTOMAÇÃO OTIMIZA AI',
+      title: 'Vincule a automação da Otimiza',
+      text: 'Nossa equipe associa a instância já configurada à sua empresa. Seus fluxos n8n continuam funcionando e passam a atualizar o CRM.',
+      action: 'Solicitar conexão',
+      steps: ['Informe qual número usa na automação', 'Nossa equipe valida a instância', 'O canal aparece no CRM com o histórico sincronizado'],
+    },
+    ads: {
+      eyebrow: 'ATRIBUIÇÃO DE CAMPANHAS',
+      title: 'Conecte sua conta Meta Ads',
+      text: 'Veja investimento, leads e vendas no mesmo relatório. A conexão é feita pela conta de anúncios da sua empresa.',
+      action: 'Conectar conta de anúncios',
+      steps: ['Autorize a conta de anúncios', 'Escolha as campanhas que deseja acompanhar', 'Use links rastreáveis nos seus anúncios'],
+    },
+  }[provider]
+  return <>
+    <section className="page-head integration-head"><div><span className="eyebrow">CONEXÕES</span><h1>Integrações</h1><p>Conecte seus canais e acompanhe os resultados em um único lugar.</p></div><span className="security-status"><ShieldCheck size={16}/> Dados protegidos</span></section>
+    <section className="integration-layout">
+      <div className="integration-list">
+        <button className={`integration-item ${provider === 'meta' ? 'is-current' : ''}`} onClick={() => { setProvider('meta'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp Oficial</b><small>Conecte seu próprio número</small></span><em>Recomendado</em><ChevronRight size={17}/></button>
+        <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => { setProvider('uazapi'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Automação Otimiza</b><small>Instância configurada pela equipe</small></span><em className="integration-item__state">1 ativo</em><ChevronRight size={17}/></button>
+        <button className={`integration-item ${provider === 'ads' ? 'is-current' : ''}`} onClick={() => { setProvider('ads'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--ads"><TrendingUp size={20}/></span><span><b>Meta Ads</b><small>Investimento e vendas atribuídas</small></span><ChevronRight size={17}/></button>
+      </div>
+      <article className="connection-detail panel">
+        <span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p>
+        <div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
+        {!started ? <button className="primary-button" type="button" onClick={() => setStarted(true)}><Link2 size={17}/>{detail.action}</button> : <div className="connection-started"><CheckCircle2 size={19}/><div><b>Próximo passo preparado</b><p>{provider === 'uazapi' ? 'Sua solicitação será enviada para a equipe Otimiza AI assim que o CRM estiver publicado.' : 'Ao publicar o CRM e configurar o app Meta, este botão abre a autorização segura da sua conta.'}</p></div></div>}
+        <small className="connection-note">{provider === 'meta' ? 'O CRM recebe eventos e organiza os dados. Nenhuma resposta automática é ativada nesta conexão.' : provider === 'uazapi' ? 'A equipe Otimiza AI mantém as credenciais técnicas protegidas no servidor.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
+      </article>
+    </section>
+  </>
+}
+
 function LeadDrawer({ lead, onClose, onAdvance }: { lead: Lead; onClose: () => void; onAdvance: () => void }) {
   const currentIndex = stages.indexOf(lead.stage)
   return <aside className="drawer" aria-label={`Detalhes de ${lead.name}`}>
@@ -200,7 +246,6 @@ export default function App() {
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
 
   const addLead = () => {
     const newLead: Lead = { id: Date.now(), name: 'Novo contato', initials: 'NC', stage: 'Novos leads', channel: 'Comercial', source: 'Orgânico', time: 'agora', lastMessage: 'Lead criado manualmente.', temperature: 'Novo', owner: 'Lara', avatar: 'LC' }
@@ -221,23 +266,23 @@ export default function App() {
   const renderContent = () => {
     if (page === 'dashboard') return <Dashboard onNavigate={setPage} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
-    const copy: Record<Exclude<Page, 'dashboard' | 'crm'>, [typeof Bot, string, string, string]> = {
+    if (page === 'configuracoes') return <Integrations />
+    const copy: Record<Exclude<Page, 'dashboard' | 'crm' | 'configuracoes'>, [typeof Bot, string, string, string]> = {
       leads: [UsersRound, 'BASE DE CONTATOS', 'Leads que viram relacionamento.', 'Organize dados, responsáveis e histórico de cada pessoa em um só lugar.'],
       conversas: [MessageCircleMore, 'WHATSAPP CENTRALIZADO', 'Todas as conversas, com contexto.', 'Acompanhe o atendimento em tempo real e receba alertas antes de perder uma oportunidade.'],
       vendas: [CircleDollarSign, 'RECEITA', 'Vendas confirmadas e em análise.', 'Separe valores negociados de pagamentos confirmados para acompanhar seu caixa com clareza.'],
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
       relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],
       chatbot: [Bot, 'CHATBOT POR REGRAS', 'Seu atendimento, do seu jeito.', 'Crie menus, palavras-chave e ações para cada número de WhatsApp sem usar IA.'],
-      configuracoes: [Settings2, 'PREFERÊNCIAS', 'Configure a operação.', 'Gerencie equipe, números conectados, campos personalizados e permissões.'],
     }
     const [icon, eyebrow, title, text] = copy[page]
     return <Placeholder icon={icon} eyebrow={eyebrow} title={title} text={text} />
   }
 
   return (
-    <div className={`app-shell ${collapsed ? 'app-shell--collapsed' : ''}`}>
+    <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div><button className="collapse-button" onClick={() => setCollapsed((value) => !value)} type="button" aria-label="Recolher menu"><PanelLeftClose size={18}/></button></div>
+        <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">CV</span><span><b>Clínica Vitta</b><small>Plano Pro</small></span><ChevronDown size={16}/></button>
         <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button>)}</nav>
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials="DV"/><span><b>Diego Viana</b><small>Administrador</small></span><ChevronDown size={15}/></div></div>

@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-otimiza_crm}
+      POSTGRES_USER: ${POSTGRES_USER:-otimiza_crm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - otimiza_crm_postgres:/var/lib/postgresql/data
+    networks: [otimiza_crm_internal]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  api:
+    image: ${OTIMIZA_CRM_API_IMAGE:?OTIMIZA_CRM_API_IMAGE is required}
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-otimiza_crm}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-otimiza_crm}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:?META_VERIFY_TOKEN is required}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:?N8N_WEBHOOK_SECRET is required}
+      ALLOW_ORIGINS: ${ALLOW_ORIGINS:-https://crm.example.com}
+    networks: [otimiza_crm_internal, easypanel]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  web:
+    image: ${OTIMIZA_CRM_WEB_IMAGE:?OTIMIZA_CRM_WEB_IMAGE is required}
+    networks: [easypanel]
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.http.services.otimiza-crm-web.loadbalancer.server.port=80
+        # Adicione o host definitivo ao apontar o subdomínio, por exemplo:
+        # traefik.http.routers.otimiza-crm-web.rule=Host(`crm.seudominio.com`)
+        # traefik.http.routers.otimiza-crm-web.entrypoints=http,https
+        # traefik.http.routers.otimiza-crm-web.tls.certresolver=letsencrypt
+
+networks:
+  otimiza_crm_internal:
+    driver: overlay
+    attachable: true
+  easypanel:
+    external: true
+
+volumes:
+  otimiza_crm_postgres:
