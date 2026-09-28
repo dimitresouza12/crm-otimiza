@@ -25,6 +25,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
+import otimizaSymbol from './assets/otimiza-ai-symbol.png'
 
 type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos'
@@ -236,7 +237,7 @@ export default function App() {
   return (
     <div className={`app-shell ${collapsed ? 'app-shell--collapsed' : ''}`}>
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><span>o</span></div><div className="brand-name">otimiza <b>AI</b></div><button className="collapse-button" onClick={() => setCollapsed((value) => !value)} type="button" aria-label="Recolher menu"><PanelLeftClose size={18}/></button></div>
+        <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div><button className="collapse-button" onClick={() => setCollapsed((value) => !value)} type="button" aria-label="Recolher menu"><PanelLeftClose size={18}/></button></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">CV</span><span><b>Clínica Vitta</b><small>Plano Pro</small></span><ChevronDown size={16}/></button>
         <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button>)}</nav>
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials="DV"/><span><b>Diego Viana</b><small>Administrador</small></span><ChevronDown size={15}/></div></div>
