@@ -212,54 +212,37 @@ function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; e
   return <section className="empty-page panel"><div className="empty-page__icon"><Icon size={24}/></div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p><button className="primary-button" type="button"><Plus size={18}/> Configurar agora</button></section>
 }
 
-function Integrations({ session, onRequestAccess }: { session: Session | null; onRequestAccess: () => void }) {
+function Integrations({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void }) {
   const [provider, setProvider] = useState<'meta' | 'uazapi' | 'ads'>('meta')
   const [started, setStarted] = useState(false)
   const [channelName, setChannelName] = useState('Comercial')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [phoneNumberId, setPhoneNumberId] = useState('')
-  const [instance, setInstance] = useState('')
   const [accessToken, setAccessToken] = useState('')
   const [connectionError, setConnectionError] = useState('')
   const [connecting, setConnecting] = useState(false)
-  const detail = {
-    meta: {
-      eyebrow: 'WHATSAPP BUSINESS PLATFORM',
-      title: 'Conecte seu WhatsApp Oficial',
-      text: 'Você autoriza a conexão na sua própria conta Meta. O CRM acompanha conversas, leads e vendas sem responder por conta própria.',
-      action: 'Conectar com a Meta',
-      steps: ['Entre na conta Meta da sua empresa', 'Escolha a conta do WhatsApp Business', 'Selecione o número que deseja acompanhar'],
-    },
-    uazapi: {
-      eyebrow: 'AUTOMAÇÃO OTIMIZA AI',
-      title: 'Vincule a automação da Otimiza',
-      text: 'Nossa equipe associa a instância já configurada à sua empresa. Seus fluxos n8n continuam funcionando e passam a atualizar o CRM.',
-      action: 'Solicitar conexão',
-      steps: ['Informe qual número usa na automação', 'Nossa equipe valida a instância', 'O canal aparece no CRM com o histórico sincronizado'],
-    },
-    ads: {
-      eyebrow: 'ATRIBUIÇÃO DE CAMPANHAS',
-      title: 'Conecte sua conta Meta Ads',
-      text: 'Veja investimento, leads e vendas no mesmo relatório. A conexão é feita pela conta de anúncios da sua empresa.',
-      action: 'Conectar conta de anúncios',
-      steps: ['Autorize a conta de anúncios', 'Escolha as campanhas que deseja acompanhar', 'Use links rastreáveis nos seus anúncios'],
-    },
-  }[provider]
+  const uazapiEnabled = Boolean(account?.uses_automation || account?.plan === 'chatbot' || account?.plan === 'automation')
+  const detail = provider === 'meta'
+    ? { eyebrow: 'WHATSAPP BUSINESS PLATFORM', title: 'Conecte seu WhatsApp Oficial', text: 'Para acompanhar atendimento sem chatbot ou automação, conecte o número pela API Oficial da Meta.', action: 'Conectar com a Meta', steps: ['Entre na conta Meta da sua empresa', 'Escolha a conta do WhatsApp Business', 'Selecione o número que deseja acompanhar'] }
+    : provider === 'uazapi'
+      ? { eyebrow: 'CHATBOT E AUTOMAÇÃO OTIMIZA AI', title: uazapiEnabled ? 'Conecte seu número com a equipe' : 'Adicione chatbot ou automação', text: uazapiEnabled ? 'A equipe Otimiza AI conecta a instância UAZAPI e mantém o chatbot ou as automações sincronizados com o CRM.' : 'A UAZAPI é usada apenas quando sua empresa possui Chatbot ou Automação Otimiza AI.', action: uazapiEnabled ? 'Solicitar conexão da equipe' : 'Ver solução Chatbot e Automação', steps: uazapiEnabled ? ['Solicite a conexão do número', 'A equipe valida a instância UAZAPI', 'CRM, chatbot e automações usam o mesmo canal'] : ['Use o WhatsApp Oficial para acompanhamento', 'Ative Chatbot ou Automação quando quiser responder por regras ou fluxos', 'A equipe conecta a UAZAPI na ativação'] }
+      : { eyebrow: 'ATRIBUIÇÃO DE CAMPANHAS', title: 'Conecte sua conta Meta Ads', text: 'Veja investimento, leads e vendas no mesmo relatório. A conexão é feita pela conta de anúncios da sua empresa.', action: 'Conectar conta de anúncios', steps: ['Autorize a conta de anúncios', 'Escolha as campanhas que deseja acompanhar', 'Use links rastreáveis nos seus anúncios'] }
+  const requestConnection = async () => {
+    if (!session) return onRequestAccess()
+    if (provider !== 'uazapi' || !uazapiEnabled) return setStarted(true)
+    setConnecting(true); setConnectionError('')
+    try { await api.requestUazapiConnection(session); setStarted(true) } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível registrar sua solicitação.') } finally { setConnecting(false) }
+  }
   return <>
     <section className="page-head integration-head"><div><span className="eyebrow">CONEXÕES</span><h1>Integrações</h1><p>Conecte seus canais e acompanhe os resultados em um único lugar.</p></div><span className="security-status"><ShieldCheck size={16}/> Dados protegidos</span></section>
-    <section className="integration-layout">
-      <div className="integration-list">
-        <button className={`integration-item ${provider === 'meta' ? 'is-current' : ''}`} onClick={() => { setProvider('meta'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp Oficial</b><small>Conecte seu próprio número</small></span><em>Recomendado</em><ChevronRight size={17}/></button>
-        <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => { setProvider('uazapi'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Automação Otimiza</b><small>Instância configurada pela equipe</small></span><em className="integration-item__state">1 ativo</em><ChevronRight size={17}/></button>
-        <button className={`integration-item ${provider === 'ads' ? 'is-current' : ''}`} onClick={() => { setProvider('ads'); setStarted(false) }} type="button"><span className="integration-logo integration-logo--ads"><TrendingUp size={20}/></span><span><b>Meta Ads</b><small>Investimento e vendas atribuídas</small></span><ChevronRight size={17}/></button>
-      </div>
-      <article className="connection-detail panel">
-        <span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p>
-        <div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-        {!started ? <button className="primary-button" type="button" onClick={() => session ? setStarted(true) : onRequestAccess()}><Link2 size={17}/>{detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: provider === 'meta' ? 'meta_cloud' : 'uazapi', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId: phoneNumberId || undefined, externalAccountId: instance || undefined, accessToken: accessToken || undefined }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label>{provider === 'meta' ? <><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label></> : <><label>Nome da instância UAZAPI<input value={instance} onChange={(event) => setInstance(event.target.value)} required placeholder="Nome da instância criada pela Otimiza"/></label><label>Token da instância <small>opcional</small><input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} minLength={10} type="password" placeholder="Token da UAZAPI"/></label></>}{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
-        <small className="connection-note">{provider === 'meta' ? 'O CRM recebe eventos e organiza os dados. Nenhuma resposta automática é ativada nesta conexão.' : provider === 'uazapi' ? 'A equipe Otimiza AI mantém as credenciais técnicas protegidas no servidor.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
-      </article>
-    </section>
+    <section className="integration-layout"><div className="integration-list">
+      <button className={`integration-item ${provider === 'meta' ? 'is-current' : ''}`} onClick={() => { setProvider('meta'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp Oficial</b><small>Para atendimento sem automação</small></span><em>Recomendado</em><ChevronRight size={17}/></button>
+      <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => { setProvider('uazapi'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Chatbot e automação</b><small>UAZAPI conectada pela equipe</small></span><em className="integration-item__state">{uazapiEnabled ? 'Disponível' : 'Opcional'}</em><ChevronRight size={17}/></button>
+      <button className={`integration-item ${provider === 'ads' ? 'is-current' : ''}`} onClick={() => { setProvider('ads'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--ads"><TrendingUp size={20}/></span><span><b>Meta Ads</b><small>Investimento e vendas atribuídas</small></span><ChevronRight size={17}/></button>
+    </div><article className="connection-detail panel"><span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p><div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
+      {!started ? <button className="primary-button" type="button" disabled={connecting} onClick={() => void requestConnection()}><Link2 size={17}/>{connecting ? 'Enviando...' : detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : provider === 'uazapi' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>{uazapiEnabled ? 'Solicitação registrada' : 'WhatsApp Oficial recomendado'}</b><p>{uazapiEnabled ? 'Nossa equipe fará a configuração técnica da instância UAZAPI.' : 'Para acompanhar atendimentos sem chatbot ou automação, conecte seu número usando a API Oficial da Meta.'}</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: 'meta_cloud', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId, accessToken }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label>{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
+      {connectionError && !started && <p className="form-error">{connectionError}</p>}<small className="connection-note">{provider === 'meta' ? 'A API Oficial organiza conversas e dados sem ativar respostas automáticas.' : provider === 'uazapi' ? 'As credenciais e os webhooks da UAZAPI são configurados pela equipe Otimiza AI.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
+    </article></section>
   </>
 }
 
@@ -340,7 +323,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
-  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; role: string } | null>(null)
+  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; uses_automation: boolean; role: string } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
   const [sales, setSales] = useState<SaleRow[]>([])
   const [conversations, setConversations] = useState<ConversationRow[]>([])
@@ -441,7 +424,7 @@ export default function App() {
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales}/>
-    if (page === 'configuracoes') return <Integrations session={session} onRequestAccess={() => setShowAccess(true)} />
+    if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
     const copy: Record<'trafego' | 'relatorios' | 'chatbot', [typeof Bot, string, string, string]> = {
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
       relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],

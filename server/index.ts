@@ -133,8 +133,9 @@ app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 mi
 app.get('/api/me', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
   if (!scope) return
-  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null }>(
-    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.trial_ends_at
+  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null; uses_automation: boolean }>(
+    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.trial_ends_at,
+       COALESCE((c.onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
      FROM users u JOIN companies c ON c.id = $1 WHERE u.id = $2`, [scope.companyId, scope.userId],
   )
   return { ...rows[0], role: scope.role, companyId: scope.companyId }
@@ -378,6 +379,17 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
   const parsed = connectionSchema.safeParse(request.body)
   if (!parsed.success) return reply.code(400).send({ error: 'Dados da conexão inválidos.', details: parsed.error.flatten().fieldErrors })
   const input = parsed.data
+  if (input.provider === 'uazapi') {
+    if (scope.role !== 'otimiza_admin') return reply.code(403).send({ error: 'A instância UAZAPI é conectada pela equipe Otimiza AI.' })
+    const { rows } = await query<{ plan: string; uses_automation: boolean }>(
+      `SELECT plan, COALESCE((onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
+       FROM companies WHERE id = $1`, [scope.companyId],
+    )
+    const access = rows[0]
+    if (!access || !(access.uses_automation || ['chatbot', 'automation'].includes(access.plan))) {
+      return reply.code(403).send({ error: 'A conexão UAZAPI é reservada aos planos Chatbot ou Automação da Otimiza AI.' })
+    }
+  }
   const result = await transaction(async (client) => {
     const pipeline = await client.query<{ id: string }>('SELECT id FROM pipelines WHERE company_id = $1 AND is_default = true LIMIT 1', [scope.companyId])
     const channel = await client.query<{ id: string }>(
@@ -392,6 +404,30 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
     return { channelId: channel.rows[0].id, connectionId: connection.rows[0].id, webhookSecret: connection.rows[0].webhook_secret }
   })
   return reply.code(201).send({ ...result, webhookPath: input.provider === 'uazapi' ? `/webhooks/uazapi/${result.connectionId}` : '/webhooks/meta' })
+})
+
+app.post('/api/integrations/uazapi/request', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode solicitar uma conexão.' })
+  const { rows } = await query<{ plan: string; uses_automation: boolean }>(
+    `SELECT plan, COALESCE((onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
+     FROM companies WHERE id = $1`, [scope.companyId],
+  )
+  const company = rows[0]
+  if (!company || !(company.uses_automation || ['chatbot', 'automation'].includes(company.plan))) {
+    return reply.code(403).send({ error: 'A conexão UAZAPI é reservada aos planos Chatbot ou Automação da Otimiza AI.' })
+  }
+  const requestedAt = new Date().toISOString()
+  await query(
+    `UPDATE companies SET onboarding = jsonb_set(onboarding, '{uazapiConnectionRequestedAt}', to_jsonb($2::text), true), updated_at = now()
+     WHERE id = $1`, [scope.companyId, requestedAt],
+  )
+  await query(
+    `INSERT INTO audit_logs (company_id, actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES ($1, $2, 'uazapi_connection_requested', 'company', $1, '{}'::jsonb)`, [scope.companyId, scope.userId],
+  )
+  return reply.code(202).send({ requestedAt })
 })
 
 const safeEqual = (a: string, b: string) => {
