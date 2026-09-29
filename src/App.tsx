@@ -212,9 +212,16 @@ function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; e
   return <section className="empty-page panel"><div className="empty-page__icon"><Icon size={24}/></div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p><button className="primary-button" type="button"><Plus size={18}/> Configurar agora</button></section>
 }
 
-function Integrations() {
+function Integrations({ session, onRequestAccess }: { session: Session | null; onRequestAccess: () => void }) {
   const [provider, setProvider] = useState<'meta' | 'uazapi' | 'ads'>('meta')
   const [started, setStarted] = useState(false)
+  const [channelName, setChannelName] = useState('Comercial')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [phoneNumberId, setPhoneNumberId] = useState('')
+  const [instance, setInstance] = useState('')
+  const [accessToken, setAccessToken] = useState('')
+  const [connectionError, setConnectionError] = useState('')
+  const [connecting, setConnecting] = useState(false)
   const detail = {
     meta: {
       eyebrow: 'WHATSAPP BUSINESS PLATFORM',
@@ -249,7 +256,7 @@ function Integrations() {
       <article className="connection-detail panel">
         <span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p>
         <div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-        {!started ? <button className="primary-button" type="button" onClick={() => setStarted(true)}><Link2 size={17}/>{detail.action}</button> : <div className="connection-started"><CheckCircle2 size={19}/><div><b>Próximo passo preparado</b><p>{provider === 'uazapi' ? 'Sua solicitação será enviada para a equipe Otimiza AI assim que o CRM estiver publicado.' : 'Ao publicar o CRM e configurar o app Meta, este botão abre a autorização segura da sua conta.'}</p></div></div>}
+        {!started ? <button className="primary-button" type="button" onClick={() => session ? setStarted(true) : onRequestAccess()}><Link2 size={17}/>{detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: provider === 'meta' ? 'meta_cloud' : 'uazapi', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId: phoneNumberId || undefined, externalAccountId: instance || undefined, accessToken: accessToken || undefined }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label>{provider === 'meta' ? <><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label></> : <><label>Nome da instância UAZAPI<input value={instance} onChange={(event) => setInstance(event.target.value)} required placeholder="Nome da instância criada pela Otimiza"/></label><label>Token da instância <small>opcional</small><input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} minLength={10} type="password" placeholder="Token da UAZAPI"/></label></>}{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
         <small className="connection-note">{provider === 'meta' ? 'O CRM recebe eventos e organiza os dados. Nenhuma resposta automática é ativada nesta conexão.' : provider === 'uazapi' ? 'A equipe Otimiza AI mantém as credenciais técnicas protegidas no servidor.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
       </article>
     </section>
@@ -403,7 +410,7 @@ export default function App() {
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales}/>
-    if (page === 'configuracoes') return <Integrations />
+    if (page === 'configuracoes') return <Integrations session={session} onRequestAccess={() => setShowAccess(true)} />
     const copy: Record<'trafego' | 'relatorios' | 'chatbot', [typeof Bot, string, string, string]> = {
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
       relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],
