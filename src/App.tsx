@@ -302,7 +302,7 @@ function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuth
   return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">OTIMIZA AI CRM</span><h2>{mode === 'login' ? 'Acesse sua empresa' : 'Teste o CRM por 7 dias'}</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Como quer ser chamado?"/></label><label>Nome da empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'login' ? 'Entrar no CRM' : 'Criar teste gratuito'} <ArrowRight size={16}/></button></form><button className="modal__switch" type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? 'Ainda não tenho conta · testar por 7 dias' : 'Já tenho conta · entrar'}</button></Modal>
 }
 
-function LeadDrawer({ lead, onClose, onAdvance }: { lead: Lead; onClose: () => void; onAdvance: () => void }) {
+function LeadDrawer({ lead, onClose, onAdvance, onRegisterSale }: { lead: Lead; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void }) {
   const currentIndex = stages.indexOf(lead.stage)
   return <aside className="drawer" aria-label={`Detalhes de ${lead.name}`}>
     <header className="drawer__header"><button onClick={onClose} type="button" aria-label="Fechar detalhes"><X size={20}/></button><span>DETALHE DO LEAD</span><button type="button" aria-label="Mais ações"><MoreHorizontal size={21}/></button></header>
@@ -311,8 +311,22 @@ function LeadDrawer({ lead, onClose, onAdvance }: { lead: Lead; onClose: () => v
     <div className="drawer__insight"><Sparkles size={18}/><div><b>Leitura da Otimiza AI</b><p>Lead com alta intenção. Citou preço e pediu condição de pagamento.</p></div></div>
     <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div></section>
     <section className="drawer__section"><h3>Última mensagem</h3><div className="message-preview"><p>{lead.lastMessage}</p><small>{lead.time}</small></div></section>
-    <div className="drawer__bottom">{lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos' ? <button className="primary-button" onClick={onAdvance} type="button">Mover para {stages[currentIndex + 1]} <ArrowRight size={17}/></button> : <button className="primary-button" onClick={onClose} type="button">{lead.stage === 'Ganhos' ? 'Venda confirmada' : 'Lead perdido'} <Goal size={17}/></button>}</div>
+    <div className="drawer__bottom">{lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos' ? stages[currentIndex + 1] === 'Ganhos' ? <button className="primary-button" onClick={onRegisterSale} type="button">Confirmar venda <CircleDollarSign size={17}/></button> : <button className="primary-button" onClick={onAdvance} type="button">Mover para {stages[currentIndex + 1]} <ArrowRight size={17}/></button> : <button className="primary-button" onClick={onClose} type="button">{lead.stage === 'Ganhos' ? 'Venda confirmada' : 'Lead perdido'} <Goal size={17}/></button>}</div>
   </aside>
+}
+
+function SaleForm({ lead, onClose, onSave }: { lead: Lead; onClose: () => void; onSave: (amount: number) => Promise<void> }) {
+  const [amount, setAmount] = useState(lead.value ? String(lead.value) : '')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const value = Number(amount.replace(',', '.'))
+    if (!Number.isFinite(value) || value <= 0) return setError('Informe o valor final da venda.')
+    setSaving(true); setError('')
+    try { await onSave(value); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível registrar a venda.') } finally { setSaving(false) }
+  }
+  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">VENDA CONFIRMADA</span><h2>Registrar faturamento</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}><div className="sale-contact"><Avatar initials={lead.initials}/><span><b>{lead.name}</b><small>Oportunidade em negociação</small></span></div><label>Valor final da venda<input required autoFocus inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Ex.: 1890,00"/></label><p className="sale-form-note">Ao confirmar, o card vai para Ganhos e o valor entra no faturamento do dashboard.</p>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Registrando...' : 'Confirmar venda'} <CheckCircle2 size={16}/></button></form></Modal>
 }
 
 const temperatureLabel: Record<'new' | 'warm' | 'hot', Lead['temperature']> = { new: 'Novo', warm: 'Morno', hot: 'Quente' }
@@ -332,6 +346,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationRow[]>([])
   const [showAccess, setShowAccess] = useState(false)
   const [showLeadForm, setShowLeadForm] = useState(false)
+  const [showSaleForm, setShowSaleForm] = useState(false)
   const [syncError, setSyncError] = useState('')
   const [stageIds, setStageIds] = useState<Record<string, string>>({})
 
@@ -404,6 +419,22 @@ export default function App() {
     setSelectedLead(updated)
   }
 
+  const registerSale = async (amount: number) => {
+    if (!selectedLead) return
+    const updated = { ...selectedLead, stage: 'Ganhos' as Stage, value: amount, time: 'agora' }
+    if (session && selectedLead.opportunityId) {
+      if (!stageIds.Ganhos) throw new Error('As etapas do funil ainda estão sendo sincronizadas.')
+      await Promise.all([
+        api.updateOpportunity(session, selectedLead.opportunityId, { stageId: stageIds.Ganhos, estimatedValue: amount }),
+        api.createSale(session, { opportunityId: selectedLead.opportunityId, amount, status: 'confirmed' }),
+      ])
+      await loadWorkspace(session)
+    } else {
+      setLeads((current) => current.map((lead) => lead.id === updated.id ? updated : lead))
+    }
+    setSelectedLead(updated)
+  }
+
   const renderContent = () => {
     if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
@@ -429,8 +460,9 @@ export default function App() {
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
       <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button"><Sparkles size={15}/> Central de ajuda</button>{session ? <button className="session-button" type="button" onClick={signOut}>Sair</button> : <button className="session-button" type="button" onClick={() => setShowAccess(true)}>Entrar</button>}<button className="notification-button" type="button" aria-label="Notificações"><Bell size={19}/><i/></button></div></header><div className="content-scroll">{renderContent()}</div></main>
-      {selectedLead && <><button className="drawer-backdrop" onClick={() => setSelectedLead(null)} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} onClose={() => setSelectedLead(null)} onAdvance={advanceLead}/></>}
+      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
+      {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
     </div>
   )
 }
