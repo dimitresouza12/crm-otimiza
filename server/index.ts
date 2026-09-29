@@ -400,6 +400,59 @@ const safeEqual = (a: string, b: string) => {
   return first.length === second.length && timingSafeEqual(first, second)
 }
 
+const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+
+const pickText = (value: unknown): string | null => {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  const input = record(value)
+  for (const key of ['body', 'text', 'conversation', 'caption']) {
+    const result = pickText(input[key])
+    if (result) return result
+  }
+  return null
+}
+
+const uazapiTimestamp = (value: unknown) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric) || numeric <= 0) return new Date()
+  return new Date(numeric > 10_000_000_000 ? numeric : numeric * 1000)
+}
+
+const saveUazapiMessage = async (connection: { id: string; company_id: string; channel_id: string }, payload: Record<string, unknown>) => {
+  const data = record(payload.data ?? payload.message ?? payload)
+  const key = record(data.key)
+  const message = record(data.message)
+  const remoteId = String(key.remoteJid ?? data.remoteJid ?? data.chatid ?? data.chatId ?? data.from ?? data.number ?? '')
+  const isGroup = Boolean(data.wa_isGroup ?? data.isGroup) || remoteId.endsWith('@g.us')
+  const phone = remoteId.split('@')[0].replace(/\D/g, '')
+  const externalId = String(key.id ?? data.id ?? data.messageId ?? '')
+  if (!phone || phone.length < 8 || !externalId || isGroup) return false
+  const fromMe = Boolean(key.fromMe ?? data.fromMe ?? data.from_me)
+  const pushName = String(data.pushName ?? data.push_name ?? data.senderName ?? data.name ?? '') || null
+  const body = pickText(data.text) ?? pickText(message) ?? pickText(data.content)
+  const messageType = String(data.type ?? data.messageType ?? Object.keys(message)[0] ?? 'text')
+  const sentAt = uazapiTimestamp(data.timestamp ?? data.messageTimestamp ?? key.timestamp)
+  const contact = await query<{ id: string }>(
+    `INSERT INTO contacts (company_id, phone_e164, name, first_source, last_source)
+     VALUES ($1, $2, $3, 'WhatsApp', 'WhatsApp')
+     ON CONFLICT (company_id, phone_e164) DO UPDATE SET name = COALESCE(EXCLUDED.name, contacts.name), last_seen_at = now(), updated_at = now()
+     RETURNING id`, [connection.company_id, phone, pushName],
+  )
+  const conversation = await query<{ id: string }>(
+    `INSERT INTO conversations (company_id, channel_id, contact_id, external_id, last_message_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (channel_id, external_id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, updated_at = now()
+     RETURNING id`, [connection.company_id, connection.channel_id, contact.rows[0].id, remoteId, sentAt],
+  )
+  await query(
+    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+     ON CONFLICT (conversation_id, external_id) DO NOTHING`,
+    [connection.company_id, conversation.rows[0].id, externalId, fromMe ? 'outbound' : 'inbound', messageType, body, sentAt, JSON.stringify(payload)],
+  )
+  return true
+}
+
 const metaSignatureValid = (request: FastifyRequest) => {
   const secret = process.env.META_APP_SECRET
   if (!secret) return config.nodeEnv !== 'production'
@@ -475,8 +528,8 @@ app.post('/webhooks/meta', { config: { rawBody: true } }, async (request, reply)
 app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   const { connectionId } = request.params as { connectionId: string }
   const sentSecret = request.headers['x-otimiza-webhook-secret']
-  const { rows } = await query<{ id: string; company_id: string; webhook_secret: string }>(
-    `SELECT wc.id, c.company_id, wc.webhook_secret FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
+  const { rows } = await query<{ id: string; company_id: string; channel_id: string; webhook_secret: string }>(
+    `SELECT wc.id, c.company_id, wc.channel_id, wc.webhook_secret FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
      WHERE wc.id = $1 AND wc.provider = 'uazapi'`, [connectionId],
   )
   const connection = rows[0]
@@ -488,6 +541,12 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
      VALUES ($1, $2, 'uazapi', $3, $4, $5::jsonb) ON CONFLICT (provider, external_event_id) DO NOTHING`,
     [connection.company_id, connection.id, externalEventId, String(payload.event ?? 'event'), JSON.stringify(payload)],
   )
+  const event = String(payload.event ?? payload.type ?? '').toLowerCase()
+  if (event.includes('message') || record(payload.data ?? payload.message).key || record(payload.data ?? payload.message).message) await saveUazapiMessage(connection, payload)
+  if (event.includes('connection')) {
+    const status = String(record(payload.data).status ?? payload.status ?? '').toLowerCase()
+    if (status) await query(`UPDATE whatsapp_channels SET status = $1, updated_at = now() WHERE id = $2`, [status.includes('connect') && !status.includes('disconnect') ? 'connected' : 'disconnected', connection.channel_id])
+  }
   await query('UPDATE whatsapp_connections SET last_event_at = now(), updated_at = now() WHERE id = $1', [connection.id])
   return reply.code(202).send({ received: true })
 })
