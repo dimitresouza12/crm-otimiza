@@ -418,6 +418,18 @@ const uazapiTimestamp = (value: unknown) => {
   return new Date(numeric > 10_000_000_000 ? numeric : numeric * 1000)
 }
 
+const ensureInboundOpportunity = async ({ companyId, channelId, contactId, title, source }: { companyId: string; channelId: string; contactId: string; title: string; source: string }) => {
+  const stage = await getStage(companyId)
+  await query(
+    `INSERT INTO opportunities (company_id, pipeline_id, stage_id, contact_id, channel_id, title, source, last_activity_at)
+     SELECT $1, $2, $3, $4, $5, $6, $7, now()
+     WHERE NOT EXISTS (
+       SELECT 1 FROM opportunities WHERE company_id = $1 AND contact_id = $4
+     )`,
+    [companyId, stage.pipeline_id, stage.id, contactId, channelId, title, source],
+  )
+}
+
 const saveUazapiMessage = async (connection: { id: string; company_id: string; channel_id: string }, payload: Record<string, unknown>) => {
   const data = record(payload.data ?? payload.message ?? payload)
   const key = record(data.key)
@@ -438,6 +450,7 @@ const saveUazapiMessage = async (connection: { id: string; company_id: string; c
      ON CONFLICT (company_id, phone_e164) DO UPDATE SET name = COALESCE(EXCLUDED.name, contacts.name), last_seen_at = now(), updated_at = now()
      RETURNING id`, [connection.company_id, phone, pushName],
   )
+  if (!fromMe) await ensureInboundOpportunity({ companyId: connection.company_id, channelId: connection.channel_id, contactId: contact.rows[0].id, title: pushName ?? `Lead ${phone}`, source: 'WhatsApp' })
   const conversation = await query<{ id: string }>(
     `INSERT INTO conversations (company_id, channel_id, contact_id, external_id, last_message_at)
      VALUES ($1, $2, $3, $4, $5)
@@ -505,6 +518,7 @@ app.post('/webhooks/meta', { config: { rawBody: true } }, async (request, reply)
            ON CONFLICT (company_id, phone_e164) DO UPDATE SET name = COALESCE(EXCLUDED.name, contacts.name), last_seen_at = now(), updated_at = now()
            RETURNING id`, [connection.company_id, phone, String(contactPayload?.profile && (contactPayload.profile as Record<string, unknown>).name || '') || null],
         )
+        await ensureInboundOpportunity({ companyId: connection.company_id, channelId: connection.channel_id, contactId: contact.rows[0].id, title: String(contactPayload?.profile && (contactPayload.profile as Record<string, unknown>).name || `Lead ${phone}`), source: 'WhatsApp' })
         const conversation = await query<{ id: string }>(
           `INSERT INTO conversations (company_id, channel_id, contact_id, external_id, last_message_at)
            VALUES ($1, $2, $3, $4, now())
@@ -590,12 +604,28 @@ app.post('/webhooks/n8n/:companyId', async (request, reply) => {
        WHERE p.id = $1 AND lower(ps.name) = lower($2) LIMIT 1`, [pipeline.rows[0].id, String(opportunityInput.stage ?? suggestedStages[eventType])],
     )
     if (stage.rows[0]) {
-      const opportunity = await query<{ id: string }>(
-        `INSERT INTO opportunities (company_id, pipeline_id, stage_id, contact_id, title, temperature, estimated_value, source, last_activity_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) RETURNING id`,
-        [companyId, pipeline.rows[0].id, stage.rows[0].id, contactId, String(opportunityInput.title ?? contactInput?.name ?? 'Nova oportunidade'), String(opportunityInput.temperature ?? 'new'), Number(opportunityInput.value ?? 0) || null, String(opportunityInput.source ?? 'Automação')],
+      const existing = await query<{ id: string }>(
+        `SELECT id FROM opportunities WHERE company_id = $1 AND contact_id = $2
+         ORDER BY updated_at DESC LIMIT 1`, [companyId, contactId],
       )
-      opportunityId = opportunity.rows[0].id
+      if (existing.rows[0]) {
+        const opportunity = await query<{ id: string }>(
+          `UPDATE opportunities
+           SET stage_id = $3, title = COALESCE($4, title), temperature = COALESCE($5, temperature),
+               estimated_value = COALESCE($6, estimated_value), source = COALESCE($7, source),
+               last_activity_at = now(), updated_at = now()
+           WHERE id = $1 AND company_id = $2 RETURNING id`,
+          [existing.rows[0].id, companyId, stage.rows[0].id, opportunityInput.title ? String(opportunityInput.title) : null, opportunityInput.temperature ? String(opportunityInput.temperature) : null, Number(opportunityInput.value ?? 0) || null, opportunityInput.source ? String(opportunityInput.source) : null],
+        )
+        opportunityId = opportunity.rows[0].id
+      } else {
+        const opportunity = await query<{ id: string }>(
+          `INSERT INTO opportunities (company_id, pipeline_id, stage_id, contact_id, title, temperature, estimated_value, source, last_activity_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) RETURNING id`,
+          [companyId, pipeline.rows[0].id, stage.rows[0].id, contactId, String(opportunityInput.title ?? contactInput?.name ?? 'Nova oportunidade'), String(opportunityInput.temperature ?? 'new'), Number(opportunityInput.value ?? 0) || null, String(opportunityInput.source ?? 'Automação')],
+        )
+        opportunityId = opportunity.rows[0].id
+      }
     }
   }
   if (saleInput && contactId && ['sale_detected', 'sale_confirmed'].includes(eventType)) {
