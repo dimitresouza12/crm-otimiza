@@ -1,6 +1,6 @@
 # Publicação no EasyPanel
 
-O CRM tem dois serviços de aplicação e um banco PostgreSQL. Crie os três no mesmo projeto do EasyPanel.
+O CRM usa um único aplicativo conectado ao PostgreSQL interno. Crie apenas o banco e um serviço de aplicação no mesmo projeto do EasyPanel.
 
 ## 1. PostgreSQL
 
@@ -14,14 +14,14 @@ O banco já foi criado no projeto `gestao_padariaideal` com o serviço `postgres
 
 O banco não deve ter porta pública. A aplicação deve usar a URL interna fornecida pelo EasyPanel.
 
-## 2. API
+## 2. Aplicativo CRM
 
-Crie um serviço a partir deste repositório, usando o arquivo `Dockerfile.api`. Configure:
+Crie um serviço a partir deste repositório do GitHub usando o `Dockerfile` da raiz. Ele compila o painel web, executa a API, aplica as migrações e serve tudo no mesmo domínio. Configure:
 
 | Variável | Como preencher |
 | --- | --- |
 | `NODE_ENV` | `production` |
-| `API_PORT` | `3001` |
+| `PORT` | `3000` |
 | `DATABASE_URL` | URL interna do PostgreSQL, no formato `postgres://otimiza_crm:SENHA@HOST:5432/otimiza_crm` |
 | `JWT_SECRET` | `openssl rand -base64 48` |
 | `APP_ENCRYPTION_KEY` | `openssl rand -base64 32` |
@@ -29,36 +29,28 @@ Crie um serviço a partir deste repositório, usando o arquivo `Dockerfile.api`.
 | `META_APP_ID` | ID do app Meta, quando ele for criado |
 | `META_APP_SECRET` | segredo do app Meta |
 | `N8N_WEBHOOK_SECRET` | `openssl rand -hex 32` |
-| `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` |
+| `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` quando o domínio estiver ativo |
 
-O comando da imagem executa a migração do banco antes de iniciar a API. A API deve receber o subdomínio `api.crm.SEUDOMINIO.com`, com HTTPS ativo.
+O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. Quando o subdomínio estiver apontado, associe `crm.SEUDOMINIO.com` ao serviço com HTTPS ativo.
 
-## 3. Frontend
-
-Crie outro serviço a partir deste repositório usando `Dockerfile.web`.
-
-Na configuração de build, defina `VITE_API_URL` com a URL pública da API, por exemplo `https://api.crm.SEUDOMINIO.com`. Esta variável é incorporada na compilação do frontend e permite que cadastro, login, kanban e métricas usem a API.
-
-Associe o domínio `crm.SEUDOMINIO.com`, com HTTPS. Quando o domínio estiver apontado, altere `ALLOW_ORIGINS` na API para o endereço exato desse CRM e faça novo deploy da API.
-
-## 4. Meta Cloud API
+## 3. Meta Cloud API
 
 No Meta for Developers, crie um aplicativo Business, adicione WhatsApp e configure:
 
-- URL de callback: `https://api.crm.SEUDOMINIO.com/webhooks/meta`
+- URL de callback: `https://crm.SEUDOMINIO.com/webhooks/meta`
 - Token de verificação: o mesmo valor de `META_VERIFY_TOKEN`
 - Campo assinado: `messages`
 
 O endpoint valida o desafio de assinatura e valida `X-Hub-Signature-256` quando `META_APP_SECRET` estiver configurado. Para o cliente conectar o próprio número, ative o fluxo **Embedded Signup** no app Meta e informe `META_APP_ID` e `META_APP_SECRET` na API.
 
-## 5. UAZAPI e n8n
+## 4. UAZAPI e n8n
 
 Para cada instância UAZAPI, registre um canal no CRM. A API retorna um caminho de webhook próprio e um segredo por conexão; eles devem ser configurados no painel da instância pela equipe Otimiza AI.
 
 Os fluxos n8n enviam eventos para:
 
 ```text
-POST https://api.crm.SEUDOMINIO.com/webhooks/n8n/{companyId}
+POST https://crm.SEUDOMINIO.com/webhooks/n8n/{companyId}
 Header: x-otimiza-n8n-secret: valor de N8N_WEBHOOK_SECRET
 ```
 
@@ -69,7 +61,7 @@ Cada evento precisa ter `eventId` único e um `event`, como `lead_created`, `qua
 Depois de publicar, acesse:
 
 ```text
-https://api.crm.SEUDOMINIO.com/health
+https://crm.SEUDOMINIO.com/health
 ```
 
 O resultado esperado é `status: ok`. Só então configure o callback no app Meta e conecte um número de teste.

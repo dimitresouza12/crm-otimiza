@@ -1,4 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import bcrypt from 'bcryptjs'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
@@ -20,6 +23,9 @@ const app = Fastify({
     redact: ['req.headers.authorization', 'req.headers["x-otimiza-webhook-secret"]', 'req.body.accessToken', 'req.body.instanceToken'],
   },
 })
+
+const currentDir = dirname(fileURLToPath(import.meta.url))
+const appShell = await readFile(join(currentDir, '..', 'index.html'), 'utf8')
 
 await app.register(helmet, { contentSecurityPolicy: config.nodeEnv === 'production' })
 await app.register(cors, {
@@ -513,6 +519,8 @@ app.post('/webhooks/n8n/:companyId', async (request, reply) => {
   await query('UPDATE integration_events SET processed_at = now() WHERE id = $1', [inserted.rows[0].id])
   return reply.code(202).send({ received: true, eventId: inserted.rows[0].id })
 })
+
+app.get('/*', async (_request, reply) => reply.type('text/html; charset=utf-8').send(appShell))
 
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error)

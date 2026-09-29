@@ -9,7 +9,6 @@ export type Session = {
 type ApiError = { error?: string }
 
 const request = async <T>(path: string, options: RequestInit = {}, session?: Session): Promise<T> => {
-  if (!configuredBaseUrl) throw new Error('Defina VITE_API_URL para conectar o CRM à API.')
   const response = await fetch(`${configuredBaseUrl}${path}`, {
     ...options,
     headers: {

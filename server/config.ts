@@ -7,7 +7,7 @@ const required = (name: string) => {
 }
 
 export const config = {
-  port: Number(process.env.API_PORT ?? 3001),
+  port: Number(process.env.PORT ?? process.env.API_PORT ?? 3000),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   databaseUrl: () => required('DATABASE_URL'),
   jwtSecret: () => required('JWT_SECRET'),
