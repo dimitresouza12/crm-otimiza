@@ -45,7 +45,7 @@ O endpoint valida o desafio de assinatura e valida `X-Hub-Signature-256` quando 
 
 ## 4. UAZAPI e n8n
 
-O WhatsApp Oficial da Meta é o canal usado por clientes que somente acompanham os atendimentos no CRM. A UAZAPI é usada exclusivamente nos planos Chatbot ou Automação, e cada instância é conectada manualmente pela equipe Otimiza AI. A API retorna um caminho de webhook próprio e um segredo por conexão; ambos devem ser configurados no painel da instância pela equipe.
+O WhatsApp Oficial da Meta é o canal usado por clientes que somente acompanham os atendimentos no CRM. No plano Chatbot, o cliente informa sua Server URL, token e instância UAZAPI no CRM; o token é armazenado criptografado e o webhook é configurado automaticamente. No plano Automação, a UAZAPI é conectada pela equipe Otimiza AI após o diagnóstico e a implantação. A API retorna um caminho de webhook próprio e um segredo por conexão.
 
 Os fluxos n8n enviam eventos para:
 

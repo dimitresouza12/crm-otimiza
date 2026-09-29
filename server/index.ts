@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +11,7 @@ import rawBody from 'fastify-raw-body'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { config } from './config.js'
-import { encryptSecret } from './crypto.js'
+import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 
 type Token = { userId: string; companyId: string; role: string }
@@ -358,8 +358,11 @@ const connectionSchema = z.object({
   phoneNumber: z.string().min(6).max(30).optional(),
   phoneNumberId: z.string().min(2).max(100).optional(),
   externalAccountId: z.string().max(100).optional(),
+  serverUrl: z.string().url().max(300).optional(),
   accessToken: z.string().min(10).max(4096).optional(),
 })
+
+const chatbotPlan = (plan: string) => plan === 'chatbot'
 
 app.get('/api/integrations/whatsapp', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
@@ -380,14 +383,13 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
   if (!parsed.success) return reply.code(400).send({ error: 'Dados da conexão inválidos.', details: parsed.error.flatten().fieldErrors })
   const input = parsed.data
   if (input.provider === 'uazapi') {
-    if (scope.role !== 'otimiza_admin') return reply.code(403).send({ error: 'A instância UAZAPI é conectada pela equipe Otimiza AI.' })
     const { rows } = await query<{ plan: string; uses_automation: boolean }>(
       `SELECT plan, COALESCE((onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
        FROM companies WHERE id = $1`, [scope.companyId],
     )
     const access = rows[0]
-    if (!access || !(access.uses_automation || ['chatbot', 'automation'].includes(access.plan))) {
-      return reply.code(403).send({ error: 'A conexão UAZAPI é reservada aos planos Chatbot ou Automação da Otimiza AI.' })
+    if (!access || !(chatbotPlan(access.plan) || scope.role === 'otimiza_admin')) {
+      return reply.code(403).send({ error: 'A instância UAZAPI é configurada pelo cliente somente no plano Chatbot. Para Automação, a configuração é feita pela equipe Otimiza AI.' })
     }
   }
   const result = await transaction(async (client) => {
@@ -397,13 +399,37 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
        VALUES ($1, $2, $3, $4, 'pending') RETURNING id`, [scope.companyId, pipeline.rows[0]?.id ?? null, input.channelName, input.phoneNumber ?? null],
     )
     const connection = await client.query<{ id: string; webhook_secret: string }>(
-      `INSERT INTO whatsapp_connections (channel_id, provider, phone_number_id, external_account_id, access_token_encrypted)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, webhook_secret`,
-      [channel.rows[0].id, input.provider, input.phoneNumberId ?? null, input.externalAccountId ?? null, input.accessToken ? encryptSecret(input.accessToken) : null],
+      `INSERT INTO whatsapp_connections (channel_id, provider, phone_number_id, external_account_id, access_token_encrypted, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, webhook_secret`,
+      [channel.rows[0].id, input.provider, input.phoneNumberId ?? null, input.externalAccountId ?? null, input.accessToken ? encryptSecret(input.accessToken) : null, JSON.stringify({ serverUrl: input.serverUrl?.replace(/\/$/, '') ?? null })],
     )
     return { channelId: channel.rows[0].id, connectionId: connection.rows[0].id, webhookSecret: connection.rows[0].webhook_secret }
   })
-  return reply.code(201).send({ ...result, webhookPath: input.provider === 'uazapi' ? `/webhooks/uazapi/${result.connectionId}` : '/webhooks/meta' })
+  const webhookPath = input.provider === 'uazapi' ? `/webhooks/uazapi/${result.connectionId}` : '/webhooks/meta'
+  let webhookConfigured: boolean | undefined
+  let setupError: string | undefined
+  if (input.provider === 'uazapi' && input.serverUrl && input.accessToken) {
+    const forwardedProtocol = String(request.headers['x-forwarded-proto'] ?? 'https').split(',')[0].trim()
+    const callbackUrl = `${forwardedProtocol}://${request.headers.host}${webhookPath}?secret=${result.webhookSecret}`
+    try {
+      const response = await fetch(`${input.serverUrl.replace(/\/$/, '')}/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', token: input.accessToken },
+        body: JSON.stringify({ enabled: true, url: callbackUrl, events: ['messages', 'messages_update', 'connection'], excludeMessages: ['wasSentByApi', 'isGroupYes'], addUrlEvents: false, addUrlTypesMessages: false }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      webhookConfigured = response.ok
+      if (!response.ok) {
+        setupError = 'A instância foi salva, mas a UAZAPI não aceitou o webhook. Confira a Server URL e o token.'
+        await query(`UPDATE whatsapp_channels SET status = 'error', updated_at = now() WHERE id = $1`, [result.channelId])
+      }
+    } catch {
+      webhookConfigured = false
+      setupError = 'A instância foi salva, mas não foi possível alcançar a UAZAPI. Confira a Server URL e o token.'
+      await query(`UPDATE whatsapp_channels SET status = 'error', updated_at = now() WHERE id = $1`, [result.channelId])
+    }
+  }
+  return reply.code(201).send({ ...result, webhookPath, webhookConfigured, setupError })
 })
 
 app.post('/api/integrations/uazapi/request', { preHandler: authenticate }, async (request, reply) => {
@@ -415,8 +441,8 @@ app.post('/api/integrations/uazapi/request', { preHandler: authenticate }, async
      FROM companies WHERE id = $1`, [scope.companyId],
   )
   const company = rows[0]
-  if (!company || !(company.uses_automation || ['chatbot', 'automation'].includes(company.plan))) {
-    return reply.code(403).send({ error: 'A conexão UAZAPI é reservada aos planos Chatbot ou Automação da Otimiza AI.' })
+  if (!company || !(company.uses_automation || company.plan === 'automation')) {
+    return reply.code(403).send({ error: 'Esta solicitação é exclusiva para o plano Automação da Otimiza AI.' })
   }
   const requestedAt = new Date().toISOString()
   await query(
@@ -428,6 +454,71 @@ app.post('/api/integrations/uazapi/request', { preHandler: authenticate }, async
      VALUES ($1, $2, 'uazapi_connection_requested', 'company', $1, '{}'::jsonb)`, [scope.companyId, scope.userId],
   )
   return reply.code(202).send({ requestedAt })
+})
+
+const chatbotScope = async (request: FastifyRequest, reply: FastifyReply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return null
+  const { rows } = await query<{ plan: string }>('SELECT plan FROM companies WHERE id = $1', [scope.companyId])
+  if (!rows[0] || !(chatbotPlan(rows[0].plan) || scope.role === 'otimiza_admin')) {
+    reply.code(403).send({ error: 'Este recurso está disponível no plano Chatbot.' })
+    return null
+  }
+  return scope
+}
+
+app.get('/api/chatbot', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const [settings, channels, rules] = await Promise.all([
+    query<{ is_active: boolean; welcome_message: string | null; fallback_message: string | null }>('SELECT is_active, welcome_message, fallback_message FROM chatbot_settings WHERE company_id = $1', [scope.companyId]),
+    query<{ id: string; name: string; phone_number: string | null; status: string }>(`SELECT c.id, c.name, c.phone_number, c.status FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.company_id = $1 AND wc.provider = 'uazapi' ORDER BY c.created_at DESC`, [scope.companyId]),
+    query<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }>('SELECT id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position FROM chatbot_rules WHERE company_id = $1 ORDER BY position, created_at', [scope.companyId]),
+  ])
+  return { settings: settings.rows[0] ?? { is_active: false, welcome_message: '', fallback_message: '' }, channels: channels.rows, rules: rules.rows }
+})
+
+const chatbotSettingsSchema = z.object({ isActive: z.boolean(), welcomeMessage: z.string().max(2000).optional(), fallbackMessage: z.string().max(2000).optional() })
+app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const parsed = chatbotSettingsSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Configuração do chatbot inválida.' })
+  const input = parsed.data
+  const { rows } = await query(
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, updated_at = now()
+     RETURNING is_active, welcome_message, fallback_message`, [scope.companyId, input.isActive, input.welcomeMessage ?? null, input.fallbackMessage ?? null],
+  )
+  return rows[0]
+})
+
+const chatbotRuleSchema = z.object({ channelId: z.string().uuid(), name: z.string().min(2).max(100), triggerType: z.enum(['keyword', 'first_message']), triggerValue: z.string().max(160).optional(), responseText: z.string().min(1).max(2000) })
+app.post('/api/chatbot/rules', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const parsed = chatbotRuleSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Regra do chatbot inválida.' })
+  const input = parsed.data
+  const channel = await query<{ id: string }>(`SELECT c.id FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.id = $1 AND c.company_id = $2 AND wc.provider = 'uazapi'`, [input.channelId, scope.companyId])
+  if (!channel.rows[0]) return reply.code(404).send({ error: 'Número UAZAPI não encontrado.' })
+  if (input.triggerType === 'keyword' && !input.triggerValue?.trim()) return reply.code(400).send({ error: 'Informe a palavra-chave da regra.' })
+  const { rows } = await query(
+    `INSERT INTO chatbot_rules (company_id, channel_id, name, trigger_type, trigger_value, response_text, position)
+     VALUES ($1, $2, $3, $4, $5, $6, (SELECT COALESCE(max(position), 0) + 1 FROM chatbot_rules WHERE company_id = $1))
+     RETURNING id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position`, [scope.companyId, input.channelId, input.name, input.triggerType, input.triggerValue?.trim() ?? null, input.responseText],
+  )
+  return reply.code(201).send(rows[0])
+})
+
+app.delete('/api/chatbot/rules/:ruleId', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const params = z.object({ ruleId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Regra inválida.' })
+  await query('DELETE FROM chatbot_rules WHERE id = $1 AND company_id = $2', [params.data.ruleId, scope.companyId])
+  return reply.code(204).send()
 })
 
 const safeEqual = (a: string, b: string) => {
@@ -493,13 +584,43 @@ const saveUazapiMessage = async (connection: { id: string; company_id: string; c
      ON CONFLICT (channel_id, external_id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, updated_at = now()
      RETURNING id`, [connection.company_id, connection.channel_id, contact.rows[0].id, remoteId, sentAt],
   )
-  await query(
+  const insertedMessage = await query<{ id: string }>(
     `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-     ON CONFLICT (conversation_id, external_id) DO NOTHING`,
+     ON CONFLICT (conversation_id, external_id) DO NOTHING RETURNING id`,
     [connection.company_id, conversation.rows[0].id, externalId, fromMe ? 'outbound' : 'inbound', messageType, body, sentAt, JSON.stringify(payload)],
   )
-  return true
+  return { inbound: !fromMe, isNew: Boolean(insertedMessage.rows[0]), body, phone, conversationId: conversation.rows[0].id }
+}
+
+const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string }) => {
+  const metadata = record(connection.metadata)
+  const serverUrl = typeof metadata.serverUrl === 'string' ? metadata.serverUrl.replace(/\/$/, '') : ''
+  if (!serverUrl || !connection.access_token_encrypted) return
+  const { rows: settingsRows } = await query<{ is_active: boolean; fallback_message: string | null }>('SELECT is_active, fallback_message FROM chatbot_settings WHERE company_id = $1', [connection.company_id])
+  const settings = settingsRows[0]
+  if (!settings?.is_active) return
+  const [{ rows: countRows }, { rows: rules }] = await Promise.all([
+    query<{ total: string }>(`SELECT count(*)::text AS total FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`, [incoming.conversationId]),
+    query<{ id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }>(`SELECT id, trigger_type, trigger_value, response_text FROM chatbot_rules WHERE company_id = $1 AND channel_id = $2 AND is_active = true ORDER BY position, created_at`, [connection.company_id, connection.channel_id]),
+  ])
+  const normalizedBody = incoming.body?.toLocaleLowerCase('pt-BR') ?? ''
+  const rule = rules.find((item) => item.trigger_type === 'keyword' && item.trigger_value && normalizedBody.includes(item.trigger_value.toLocaleLowerCase('pt-BR')))
+    ?? (Number(countRows[0]?.total ?? 0) === 1 ? rules.find((item) => item.trigger_type === 'first_message') : undefined)
+  const responseText = rule?.response_text ?? settings.fallback_message
+  if (!responseText?.trim()) return
+  const response = await fetch(`${serverUrl}/send/text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', token: decryptSecret(connection.access_token_encrypted) },
+    body: JSON.stringify({ number: incoming.phone, text: responseText }),
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!response.ok) throw new Error(`UAZAPI respondeu ${response.status} ao enviar mensagem do chatbot`)
+  await query(
+    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload)
+     VALUES ($1, $2, $3, 'outbound', 'text', $4, now(), $5::jsonb)`,
+    [connection.company_id, incoming.conversationId, `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
+  )
 }
 
 const metaSignatureValid = (request: FastifyRequest) => {
@@ -577,9 +698,10 @@ app.post('/webhooks/meta', { config: { rawBody: true } }, async (request, reply)
 
 app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   const { connectionId } = request.params as { connectionId: string }
-  const sentSecret = request.headers['x-otimiza-webhook-secret']
-  const { rows } = await query<{ id: string; company_id: string; channel_id: string; webhook_secret: string }>(
-    `SELECT wc.id, c.company_id, wc.channel_id, wc.webhook_secret FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
+  const querySecret = (request.query as { secret?: string }).secret
+  const sentSecret = request.headers['x-otimiza-webhook-secret'] ?? querySecret
+  const { rows } = await query<{ id: string; company_id: string; channel_id: string; webhook_secret: string; access_token_encrypted: string | null; metadata: unknown }>(
+    `SELECT wc.id, c.company_id, wc.channel_id, wc.webhook_secret, wc.access_token_encrypted, wc.metadata FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
      WHERE wc.id = $1 AND wc.provider = 'uazapi'`, [connectionId],
   )
   const connection = rows[0]
@@ -592,7 +714,10 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
     [connection.company_id, connection.id, externalEventId, String(payload.event ?? 'event'), JSON.stringify(payload)],
   )
   const event = String(payload.event ?? payload.type ?? '').toLowerCase()
-  if (event.includes('message') || record(payload.data ?? payload.message).key || record(payload.data ?? payload.message).message) await saveUazapiMessage(connection, payload)
+  if (event.includes('message') || record(payload.data ?? payload.message).key || record(payload.data ?? payload.message).message) {
+    const incoming = await saveUazapiMessage(connection, payload)
+    if (incoming && incoming.inbound && incoming.isNew) void sendChatbotResponse(connection, incoming).catch((error) => app.log.error(error, 'Não foi possível enviar resposta do chatbot'))
+  }
   if (event.includes('connection')) {
     const status = String(record(payload.data).status ?? payload.status ?? '').toLowerCase()
     if (status) await query(`UPDATE whatsapp_channels SET status = $1, updated_at = now() WHERE id = $2`, [status.includes('connect') && !status.includes('disconnect') ? 'connected' : 'disconnected', connection.channel_id])

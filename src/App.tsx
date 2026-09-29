@@ -246,6 +246,44 @@ function Integrations({ session, account, onRequestAccess }: { session: Session 
   </>
 }
 
+type ChatbotData = Awaited<ReturnType<typeof api.chatbot>>
+
+function ChatbotPage({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string } | null; onRequestAccess: () => void }) {
+  const [data, setData] = useState<ChatbotData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [channelName, setChannelName] = useState('Comercial')
+  const [phone, setPhone] = useState('')
+  const [serverUrl, setServerUrl] = useState('')
+  const [instance, setInstance] = useState('')
+  const [token, setToken] = useState('')
+  const [ruleName, setRuleName] = useState('Mensagem de boas-vindas')
+  const [ruleType, setRuleType] = useState<'keyword' | 'first_message'>('first_message')
+  const [keyword, setKeyword] = useState('')
+  const [response, setResponse] = useState('Olá! Como posso te ajudar?')
+  const load = async () => {
+    if (!session) return
+    setLoading(true); setError('')
+    try { setData(await api.chatbot(session)) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') } finally { setLoading(false) }
+  }
+  useEffect(() => { void load() }, [session])
+  if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar um número UAZAPI e criar regras para o seu chatbot.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16}/></button></section>
+  if (account?.plan !== 'chatbot') return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">PLANO CHATBOT</span><h1>Chatbot configurável por número.</h1><p>Este recurso permite criar respostas por palavra chave e mensagem inicial usando sua instância UAZAPI.</p><button className="primary-button" type="button" onClick={() => setError('Solicite à equipe Otimiza AI a ativação do plano Chatbot para sua empresa.')}>Ativar plano Chatbot <ArrowRight size={16}/></button>{error && <p className="form-error">{error}</p>}</section>
+  const settings = data?.settings ?? { is_active: false, welcome_message: '', fallback_message: '' }
+  const saveSettings = async (event: FormEvent) => {
+    event.preventDefault(); if (!session || !settings) return
+    setLoading(true); setError('')
+    try { await api.saveChatbotSettings(session, { isActive: settings.is_active, welcomeMessage: settings.welcome_message ?? '', fallbackMessage: settings.fallback_message ?? '' }); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o chatbot.') } finally { setLoading(false) }
+  }
+  return <><section className="page-head chatbot-head"><div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Chatbot</h1><p>Configure respostas do seu número UAZAPI sem precisar de IA.</p></div><span className={`security-status ${settings?.is_active ? '' : 'security-status--neutral'}`}><Bot size={16}/>{settings?.is_active ? 'Chatbot ativo' : 'Chatbot pausado'}</span></section>
+    {!data ? <section className="panel chatbot-loading">{loading ? 'Carregando configurações...' : error}</section> : <section className="chatbot-layout">
+      <article className="panel chatbot-panel chatbot-panel--settings"><div className="panel__header"><div><span className="eyebrow">NÚMERO E RESPOSTAS</span><h2>Configuração do chatbot</h2></div></div>
+        {!data.channels.length ? <form className="form-stack chatbot-form" onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { const result = await api.connectWhatsapp(session, { provider: 'uazapi', channelName, phoneNumber: phone || undefined, externalAccountId: instance, serverUrl, accessToken: token }); if (result.setupError) setError(result.setupError); await load(); setToken('') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível conectar a UAZAPI.') } finally { setLoading(false) } }}><p className="chatbot-intro">Conecte uma instância UAZAPI. O CRM guarda o token de forma criptografada e configura o webhook automaticamente.</p><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp <small>opcional</small><input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="5585999999999"/></label><label>Server URL da UAZAPI<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} type="url" required placeholder="https://sua-api.exemplo.com"/></label><label>Nome da instância<input value={instance} onChange={(event) => setInstance(event.target.value)} required placeholder="Ex.: comercial-principal"/></label><label>Token da instância<input value={token} onChange={(event) => setToken(event.target.value)} minLength={10} required type="password" placeholder="Token da UAZAPI"/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Conectando...' : 'Conectar número UAZAPI'} <Link2 size={16}/></button></form> : <><div className="chatbot-channels">{data.channels.map((channel) => <div key={channel.id}><span className="connection-dot"/><span><b>{channel.name}</b><small>{channel.phone_number ?? 'Número em conexão'} · {channel.status}</small></span></div>)}</div><form className="form-stack chatbot-form" onSubmit={saveSettings}><label className="checkbox-field"><input type="checkbox" checked={settings.is_active} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, is_active: event.target.checked } } : current)}/><span>Ativar respostas automáticas</span></label><label>Mensagem de boas-vindas<textarea value={settings.welcome_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, welcome_message: event.target.value } } : current)} placeholder="Olá! Escolha uma opção para continuar."/></label><label>Resposta padrão <small>quando nenhuma regra for encontrada</small><textarea value={settings.fallback_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, fallback_message: event.target.value } } : current)} placeholder="Não entendi. Digite MENU para ver as opções."/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Salvando...' : 'Salvar configuração'} <CheckCircle2 size={16}/></button></form></>}
+      </article>
+      <article className="panel chatbot-panel"><div className="panel__header"><div><span className="eyebrow">REGRAS DE RESPOSTA</span><h2>Mensagens automáticas</h2></div><span className="count-pill">{data.rules.length}</span></div>{data.channels.length ? <><form className="chatbot-rule-form" onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { await api.createChatbotRule(session, { channelId: data.channels[0].id, name: ruleName, triggerType: ruleType, triggerValue: ruleType === 'keyword' ? keyword : undefined, responseText: response }); setKeyword(''); setResponse(''); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar a regra.') } finally { setLoading(false) } }}><label>Nome da regra<input value={ruleName} onChange={(event) => setRuleName(event.target.value)} required/></label><label>Quando<select value={ruleType} onChange={(event) => setRuleType(event.target.value as 'keyword' | 'first_message')}><option value="first_message">Receber a primeira mensagem</option><option value="keyword">Encontrar uma palavra-chave</option></select></label>{ruleType === 'keyword' && <label>Palavra-chave<input value={keyword} onChange={(event) => setKeyword(event.target.value)} required placeholder="Ex.: preços"/></label>}<label>Resposta<textarea value={response} onChange={(event) => setResponse(event.target.value)} required placeholder="Mensagem que será enviada"/></label><button className="primary-button" type="submit" disabled={loading}>Adicionar regra <Plus size={16}/></button></form><div className="chatbot-rules">{data.rules.map((rule) => <article key={rule.id}><div><span className="rule-trigger">{rule.trigger_type === 'keyword' ? `Palavra: ${rule.trigger_value}` : 'Primeira mensagem'}</span><b>{rule.name}</b><p>{rule.response_text}</p></div><button type="button" onClick={() => { void api.deleteChatbotRule(session, rule.id).then(load).catch((reason) => setError(reason instanceof Error ? reason.message : 'Não foi possível remover a regra.')) }} aria-label={`Remover ${rule.name}`}><X size={16}/></button></article>)}{!data.rules.length && <p className="chatbot-empty">Crie a primeira regra para começar.</p>}</div></> : <p className="chatbot-empty">Conecte um número UAZAPI para criar regras.</p>}</article>
+    </section>}{error && data && <p className="form-error chatbot-error">{error}</p>}</>
+}
+
 function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   return <div className="modal-layer" role="dialog" aria-modal="true"><button className="modal-layer__backdrop" type="button" aria-label="Fechar" onClick={onClose}/><section className="modal">{children}</section></div>
 }
@@ -424,13 +462,13 @@ export default function App() {
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales}/>
+    if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
-    const copy: Record<'trafego' | 'relatorios' | 'chatbot', [typeof Bot, string, string, string]> = {
+    const copy: Record<'trafego' | 'relatorios', [typeof Bot, string, string, string]> = {
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
       relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],
-      chatbot: [Bot, 'CHATBOT POR REGRAS', 'Seu atendimento, do seu jeito.', 'Crie menus, palavras-chave e ações para cada número de WhatsApp sem usar IA.'],
     }
-    const [icon, eyebrow, title, text] = copy[page]
+    const [icon, eyebrow, title, text] = copy[page as 'trafego' | 'relatorios']
     return <Placeholder icon={icon} eyebrow={eyebrow} title={title} text={text} />
   }
 
