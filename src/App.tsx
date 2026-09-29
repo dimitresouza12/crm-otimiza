@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Activity,
   ArrowRight,
@@ -28,13 +28,16 @@ import {
   X,
 } from 'lucide-react'
 import otimizaSymbol from './assets/otimiza-ai-symbol.png'
+import { api, type Session } from './lib/api'
 
 type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
-type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos'
+type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
 type Channel = 'Todos os canais' | 'Comercial' | 'Unidade Aldeota' | 'Pós-venda'
 
 type Lead = {
-  id: number
+  id: number | string
+  opportunityId?: string
+  stageId?: string
   name: string
   initials: string
   stage: Stage
@@ -48,7 +51,7 @@ type Lead = {
   avatar: string
 }
 
-const stages: Stage[] = ['Novos leads', 'Qualificados', 'Proposta enviada', 'Negociação', 'Ganhos']
+const stages: Stage[] = ['Novos leads', 'Qualificados', 'Proposta enviada', 'Negociação', 'Ganhos', 'Perdidos']
 const channels: Channel[] = ['Todos os canais', 'Comercial', 'Unidade Aldeota', 'Pós-venda']
 
 const initialLeads: Lead[] = [
@@ -109,7 +112,12 @@ function LeadCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
   )
 }
 
-function Dashboard({ onNavigate }: { onNavigate: (page: Page) => void }) {
+function Dashboard({ onNavigate, metrics }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } }) {
+  const revenue = metrics?.confirmedRevenue ?? 38640
+  const sales = metrics?.confirmedSales ?? 12
+  const openLeads = metrics?.openLeads ?? 8
+  const averageTicket = metrics?.averageTicket ?? 3220
+  const leadsThisMonth = metrics?.leadsThisMonth ?? 146
   return (
     <>
       <section className="page-head">
@@ -117,15 +125,15 @@ function Dashboard({ onNavigate }: { onNavigate: (page: Page) => void }) {
         <button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button>
       </section>
       <section className="metric-grid">
-        <MetricCard title="Receita confirmada" value="R$ 38.640" trend="18,2%" emphasis />
-        <MetricCard title="Em negociação" value="R$ 17.920" trend="8 leads quentes" />
-        <MetricCard title="Novos leads" value="146" trend="24,5%" />
-        <MetricCard title="Tempo de resposta" value="3 min" trend="42% mais rápido" />
+        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${sales} venda${sales === 1 ? '' : 's'} confirmada${sales === 1 ? '' : 's'}`} emphasis />
+        <MetricCard title="Em negociação" value={`${openLeads} leads`} trend="Acompanhe no funil" />
+        <MetricCard title="Novos leads" value={String(leadsThisMonth)} trend="Entraram neste mês" />
+        <MetricCard title="Ticket médio" value={money(averageTicket)} trend="Receita confirmada" />
       </section>
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
           <div className="panel__header"><div><span className="eyebrow">RECEITA ATRIBUÍDA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button">Ver relatório <ArrowRight size={16} /></button></div>
-          <div className="chart-summary"><strong>R$ 38.640</strong><span><TrendingUp size={15} /> 18,2%</span></div>
+          <div className="chart-summary"><strong>{money(revenue)}</strong><span><TrendingUp size={15} /> Atualizado</span></div>
           <div className="chart" aria-label="Gráfico de faturamento crescente">
             <div className="chart__grid" />
             <svg viewBox="0 0 680 208" preserveAspectRatio="none" role="img">
@@ -228,6 +236,45 @@ function Integrations() {
   </>
 }
 
+function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  return <div className="modal-layer" role="dialog" aria-modal="true"><button className="modal-layer__backdrop" type="button" aria-label="Fechar" onClick={onClose}/><section className="modal">{children}</section></div>
+}
+
+function LeadForm({ onClose, onSave }: { onClose: () => void; onSave: (input: { name: string; phone: string; source: string; estimatedValue?: number }) => Promise<void> }) {
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [source, setSource] = useState('Manual')
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setSaving(true); setError('')
+    try { await onSave({ name, phone, source, estimatedValue: value ? Number(value.replace(',', '.')) : undefined }); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar o lead.') } finally { setSaving(false) }
+  }
+  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">NOVO CONTATO</span><h2>Adicionar lead</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}><label>Nome<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contato"/></label><label>WhatsApp<input required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="(85) 99999-9999"/></label><label>Origem<select value={source} onChange={(event) => setSource(event.target.value)}><option>Manual</option><option>Meta Ads</option><option>Google Ads</option><option>Indicação</option><option>Orgânico</option></select></label><label>Valor em negociação <small>opcional</small><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ex.: 1200"/></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Criando...' : 'Criar lead'} <ArrowRight size={16}/></button></form></Modal>
+}
+
+function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (session: Session) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [name, setName] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [usesAutomation, setUsesAutomation] = useState(false)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setSaving(true); setError('')
+    try {
+      const session = mode === 'login' ? await api.login(email, password) : await api.register({ name, companyName, email, password, usesOtimizaAutomation: usesAutomation })
+      onAuthenticated(session)
+      onClose()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível entrar.') } finally { setSaving(false) }
+  }
+  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">OTIMIZA AI CRM</span><h2>{mode === 'login' ? 'Acesse sua empresa' : 'Teste o CRM por 7 dias'}</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Como quer ser chamado?"/></label><label>Nome da empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'login' ? 'Entrar no CRM' : 'Criar teste gratuito'} <ArrowRight size={16}/></button></form><button className="modal__switch" type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? 'Ainda não tenho conta · testar por 7 dias' : 'Já tenho conta · entrar'}</button></Modal>
+}
+
 function LeadDrawer({ lead, onClose, onAdvance }: { lead: Lead; onClose: () => void; onAdvance: () => void }) {
   const currentIndex = stages.indexOf(lead.stage)
   return <aside className="drawer" aria-label={`Detalhes de ${lead.name}`}>
@@ -237,21 +284,81 @@ function LeadDrawer({ lead, onClose, onAdvance }: { lead: Lead; onClose: () => v
     <div className="drawer__insight"><Sparkles size={18}/><div><b>Leitura da Otimiza AI</b><p>Lead com alta intenção. Citou preço e pediu condição de pagamento.</p></div></div>
     <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div></section>
     <section className="drawer__section"><h3>Última mensagem</h3><div className="message-preview"><p>{lead.lastMessage}</p><small>{lead.time}</small></div></section>
-    <div className="drawer__bottom">{currentIndex < stages.length - 1 ? <button className="primary-button" onClick={onAdvance} type="button">Mover para {stages[currentIndex + 1]} <ArrowRight size={17}/></button> : <button className="primary-button" onClick={onClose} type="button">Venda confirmada <Goal size={17}/></button>}</div>
+    <div className="drawer__bottom">{lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos' ? <button className="primary-button" onClick={onAdvance} type="button">Mover para {stages[currentIndex + 1]} <ArrowRight size={17}/></button> : <button className="primary-button" onClick={onClose} type="button">{lead.stage === 'Ganhos' ? 'Venda confirmada' : 'Lead perdido'} <Goal size={17}/></button>}</div>
   </aside>
 }
+
+const temperatureLabel: Record<'new' | 'warm' | 'hot', Lead['temperature']> = { new: 'Novo', warm: 'Morno', hot: 'Quente' }
+const initialsFor = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'NC'
 
 export default function App() {
   const [page, setPage] = useState<Page>('crm')
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [session, setSession] = useState<Session | null>(() => {
+    try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
+  })
+  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; role: string } | null>(null)
+  const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
+  const [showAccess, setShowAccess] = useState(false)
+  const [showLeadForm, setShowLeadForm] = useState(false)
+  const [syncError, setSyncError] = useState('')
+  const [stageIds, setStageIds] = useState<Record<string, string>>({})
+
+  const loadWorkspace = async (activeSession: Session) => {
+    const [me, dashboard, crm] = await Promise.all([api.me(activeSession), api.dashboard(activeSession), api.crm(activeSession)])
+    const freshLeads: Lead[] = crm.flatMap((stage) => stage.opportunities.map((opportunity) => ({
+      id: opportunity.id,
+      opportunityId: opportunity.id,
+      stageId: stage.id,
+      name: opportunity.contactName ?? opportunity.title,
+      initials: initialsFor(opportunity.contactName ?? opportunity.title),
+      stage: stages.includes(stage.name as Stage) ? stage.name as Stage : 'Novos leads',
+      channel: 'Comercial',
+      source: (opportunity.source as Lead['source']) || 'Orgânico',
+      value: opportunity.value === null ? undefined : Number(opportunity.value),
+      time: opportunity.lastActivityAt ? new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round((new Date(opportunity.lastActivityAt).getTime() - Date.now()) / 3_600_000), 'hour') : 'agora',
+      lastMessage: 'Sem mensagens sincronizadas ainda.',
+      temperature: temperatureLabel[opportunity.temperature] ?? 'Novo',
+      owner: me.name,
+      avatar: initialsFor(me.name),
+    })))
+    setAccount(me)
+    setStageIds(Object.fromEntries(crm.map((stage) => [stage.name, stage.id])))
+    setMetrics({ confirmedRevenue: Number(dashboard.confirmed_revenue), confirmedSales: Number(dashboard.confirmed_sales), openLeads: Number(dashboard.open_leads), averageTicket: Number(dashboard.average_ticket), leadsThisMonth: Number(dashboard.leads_this_month) })
+    setLeads(freshLeads)
+    setSyncError('')
+  }
+
+  useEffect(() => {
+    if (!session) return
+    void loadWorkspace(session).catch((reason) => setSyncError(reason instanceof Error ? reason.message : 'Não foi possível sincronizar seus dados.'))
+  }, [session])
+
+  const authenticateSession = (nextSession: Session) => {
+    localStorage.setItem('otimiza-crm-session', JSON.stringify(nextSession))
+    setSession(nextSession)
+  }
+
+  const signOut = () => {
+    localStorage.removeItem('otimiza-crm-session')
+    setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSelectedLead(null)
+  }
 
   const addLead = () => {
-    const newLead: Lead = { id: Date.now(), name: 'Novo contato', initials: 'NC', stage: 'Novos leads', channel: 'Comercial', source: 'Orgânico', time: 'agora', lastMessage: 'Lead criado manualmente.', temperature: 'Novo', owner: 'Lara', avatar: 'LC' }
-    setLeads((current) => [newLead, ...current])
-    setPage('crm')
-    setSelectedLead(newLead)
+    setShowLeadForm(true)
+  }
+
+  const createLead = async (input: { name: string; phone: string; source: string; estimatedValue?: number }) => {
+    if (session) {
+      await api.createLead(session, input)
+      await loadWorkspace(session)
+      setPage('crm')
+      return
+    }
+    const newLead: Lead = { id: Date.now(), name: input.name, initials: initialsFor(input.name), stage: 'Novos leads', channel: 'Comercial', source: input.source as Lead['source'], value: input.estimatedValue, time: 'agora', lastMessage: 'Lead criado manualmente.', temperature: 'Novo', owner: 'Lara', avatar: 'LC' }
+    setLeads((current) => [newLead, ...current]); setPage('crm'); setSelectedLead(newLead)
   }
 
   const advanceLead = () => {
@@ -259,12 +366,15 @@ export default function App() {
     const index = stages.indexOf(selectedLead.stage)
     if (index >= stages.length - 1) return
     const updated = { ...selectedLead, stage: stages[index + 1] }
+    if (session && selectedLead.opportunityId) {
+      void api.updateOpportunity(session, selectedLead.opportunityId, { stageId: stageIds[updated.stage] }).then(() => loadWorkspace(session)).catch((reason) => setSyncError(reason instanceof Error ? reason.message : 'Não foi possível mover o lead.'))
+    }
     setLeads((current) => current.map((lead) => lead.id === updated.id ? updated : lead))
     setSelectedLead(updated)
   }
 
   const renderContent = () => {
-    if (page === 'dashboard') return <Dashboard onNavigate={setPage} />
+    if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
     if (page === 'configuracoes') return <Integrations />
     const copy: Record<Exclude<Page, 'dashboard' | 'crm' | 'configuracoes'>, [typeof Bot, string, string, string]> = {
@@ -283,12 +393,13 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div></div>
-        <button className="workspace-switcher" type="button"><span className="workspace-initial">CV</span><span><b>Clínica Vitta</b><small>Plano Pro</small></span><ChevronDown size={16}/></button>
+        <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account?.company_name ?? 'Clínica Vitta')}</span><span><b>{account?.company_name ?? 'Clínica Vitta'}</b><small>{account ? `Plano ${account.plan}` : 'Demonstração'}</small></span><ChevronDown size={16}/></button>
         <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button>)}</nav>
-        <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials="DV"/><span><b>Diego Viana</b><small>Administrador</small></span><ChevronDown size={15}/></div></div>
+        <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions"><button className="help-chip" type="button"><Sparkles size={15}/> Central de ajuda</button><button className="notification-button" type="button" aria-label="Notificações"><Bell size={19}/><i/></button></div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button"><Sparkles size={15}/> Central de ajuda</button>{session ? <button className="session-button" type="button" onClick={signOut}>Sair</button> : <button className="session-button" type="button" onClick={() => setShowAccess(true)}>Entrar</button>}<button className="notification-button" type="button" aria-label="Notificações"><Bell size={19}/><i/></button></div></header><div className="content-scroll">{renderContent()}</div></main>
       {selectedLead && <><button className="drawer-backdrop" onClick={() => setSelectedLead(null)} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} onClose={() => setSelectedLead(null)} onAdvance={advanceLead}/></>}
+      {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
     </div>
   )
 }

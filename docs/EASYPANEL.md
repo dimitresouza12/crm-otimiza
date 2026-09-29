@@ -4,7 +4,7 @@ O CRM tem dois serviços de aplicação e um banco PostgreSQL. Crie os três no 
 
 ## 1. PostgreSQL
 
-Crie um serviço PostgreSQL 17 com os valores abaixo. Guarde a senha criada pelo painel.
+O banco já foi criado no projeto `gestao_padariaideal` com o serviço `postgres-crm-otimiza`. Mantenha-o sem porta pública. Para uma instalação nova, crie um serviço PostgreSQL 17 com os valores abaixo.
 
 | Variável | Valor |
 | --- | --- |
@@ -36,6 +36,8 @@ O comando da imagem executa a migração do banco antes de iniciar a API. A API 
 ## 3. Frontend
 
 Crie outro serviço a partir deste repositório usando `Dockerfile.web`.
+
+Na configuração de build, defina `VITE_API_URL` com a URL pública da API, por exemplo `https://api.crm.SEUDOMINIO.com`. Esta variável é incorporada na compilação do frontend e permite que cadastro, login, kanban e métricas usem a API.
 
 Associe o domínio `crm.SEUDOMINIO.com`, com HTTPS. Quando o domínio estiver apontado, altere `ALLOW_ORIGINS` na API para o endereço exato desse CRM e faça novo deploy da API.
 

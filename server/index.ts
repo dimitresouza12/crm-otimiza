@@ -163,6 +163,157 @@ app.get('/api/crm', { preHandler: authenticate }, async (request, reply) => {
   return rows
 })
 
+const leadSchema = z.object({
+  name: z.string().min(2).max(120),
+  phone: z.string().min(6).max(30),
+  source: z.string().min(2).max(80).default('Manual'),
+  title: z.string().min(2).max(160).optional(),
+  estimatedValue: z.coerce.number().min(0).max(99_999_999).optional(),
+  temperature: z.enum(['new', 'warm', 'hot']).default('new'),
+  stageId: z.string().uuid().optional(),
+})
+
+const normalizePhone = (value: string) => value.replace(/\D/g, '')
+
+const getDefaultPipeline = async (companyId: string) => {
+  const { rows } = await query<{ id: string }>('SELECT id FROM pipelines WHERE company_id = $1 AND is_default = true LIMIT 1', [companyId])
+  if (!rows[0]) throw new Error('PIPELINE_NOT_FOUND')
+  return rows[0].id
+}
+
+const getStage = async (companyId: string, stageId?: string) => {
+  if (stageId) {
+    const { rows } = await query<{ id: string; pipeline_id: string }>(
+      `SELECT ps.id, ps.pipeline_id FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id
+       WHERE ps.id = $1 AND p.company_id = $2 LIMIT 1`, [stageId, companyId],
+    )
+    if (rows[0]) return rows[0]
+  }
+  const { rows } = await query<{ id: string; pipeline_id: string }>(
+    `SELECT ps.id, ps.pipeline_id FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id
+     WHERE p.company_id = $1 AND p.is_default = true ORDER BY ps.position ASC LIMIT 1`, [companyId],
+  )
+  if (!rows[0]) throw new Error('STAGE_NOT_FOUND')
+  return rows[0]
+}
+
+app.get('/api/leads', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const { rows } = await query(
+    `SELECT c.id, c.name, c.phone_e164 AS phone, c.first_source AS source, c.last_seen_at,
+       o.id AS opportunity_id, o.title, o.temperature, o.estimated_value, ps.id AS stage_id, ps.name AS stage_name
+     FROM contacts c
+     LEFT JOIN LATERAL (
+       SELECT * FROM opportunities WHERE company_id = c.company_id AND contact_id = c.id ORDER BY updated_at DESC LIMIT 1
+     ) o ON true
+     LEFT JOIN pipeline_stages ps ON ps.id = o.stage_id
+     WHERE c.company_id = $1 ORDER BY c.last_seen_at DESC`, [scope.companyId],
+  )
+  return rows
+})
+
+app.post('/api/leads', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'agent', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode criar leads.' })
+  const parsed = leadSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados do lead.', details: parsed.error.flatten().fieldErrors })
+  const input = parsed.data
+  const phone = normalizePhone(input.phone)
+  if (phone.length < 8) return reply.code(400).send({ error: 'Informe um telefone válido.' })
+  const result = await transaction(async (client) => {
+    const stage = await getStage(scope.companyId, input.stageId)
+    const contact = await client.query<{ id: string }>(
+      `INSERT INTO contacts (company_id, phone_e164, name, first_source, last_source)
+       VALUES ($1, $2, $3, $4, $4)
+       ON CONFLICT (company_id, phone_e164) DO UPDATE SET name = EXCLUDED.name, last_source = EXCLUDED.last_source, last_seen_at = now(), updated_at = now()
+       RETURNING id`, [scope.companyId, phone, input.name, input.source],
+    )
+    const opportunity = await client.query<{ id: string }>(
+      `INSERT INTO opportunities (company_id, pipeline_id, stage_id, contact_id, title, temperature, estimated_value, source, assigned_user_id, last_activity_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now()) RETURNING id`,
+      [scope.companyId, stage.pipeline_id, stage.id, contact.rows[0].id, input.title ?? input.name, input.temperature, input.estimatedValue ?? null, input.source, scope.userId],
+    )
+    await client.query(
+      `INSERT INTO audit_logs (company_id, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, 'created', 'opportunity', $3, $4::jsonb)`, [scope.companyId, scope.userId, opportunity.rows[0].id, JSON.stringify({ source: input.source })],
+    )
+    return { contactId: contact.rows[0].id, opportunityId: opportunity.rows[0].id, stageId: stage.id }
+  })
+  return reply.code(201).send(result)
+})
+
+const opportunityUpdateSchema = z.object({
+  stageId: z.string().uuid().optional(),
+  estimatedValue: z.coerce.number().min(0).max(99_999_999).nullable().optional(),
+  temperature: z.enum(['new', 'warm', 'hot']).optional(),
+  title: z.string().min(2).max(160).optional(),
+})
+
+app.patch('/api/opportunities/:opportunityId', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'agent', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode alterar oportunidades.' })
+  const params = z.object({ opportunityId: z.string().uuid() }).safeParse(request.params)
+  const parsed = opportunityUpdateSchema.safeParse(request.body)
+  if (!params.success || !parsed.success) return reply.code(400).send({ error: 'Dados da oportunidade inválidos.' })
+  const current = await query<{ id: string; pipeline_id: string }>('SELECT id, pipeline_id FROM opportunities WHERE id = $1 AND company_id = $2', [params.data.opportunityId, scope.companyId])
+  if (!current.rows[0]) return reply.code(404).send({ error: 'Oportunidade não encontrada.' })
+  const nextStage = parsed.data.stageId ? await getStage(scope.companyId, parsed.data.stageId) : null
+  if (nextStage && nextStage.pipeline_id !== current.rows[0].pipeline_id) return reply.code(400).send({ error: 'A etapa selecionada pertence a outro funil.' })
+  const { rows } = await query(
+    `UPDATE opportunities SET stage_id = COALESCE($3, stage_id), estimated_value = COALESCE($4, estimated_value),
+       temperature = COALESCE($5, temperature), title = COALESCE($6, title), last_activity_at = now(), updated_at = now()
+     WHERE id = $1 AND company_id = $2 RETURNING id, stage_id, estimated_value, temperature, title`,
+    [params.data.opportunityId, scope.companyId, nextStage?.id ?? null, parsed.data.estimatedValue ?? null, parsed.data.temperature ?? null, parsed.data.title ?? null],
+  )
+  await query(
+    `INSERT INTO audit_logs (company_id, actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES ($1, $2, 'updated', 'opportunity', $3, $4::jsonb)`, [scope.companyId, scope.userId, params.data.opportunityId, JSON.stringify(parsed.data)],
+  )
+  return rows[0]
+})
+
+const saleSchema = z.object({
+  opportunityId: z.string().uuid().optional(),
+  contactId: z.string().uuid().optional(),
+  amount: z.coerce.number().positive().max(99_999_999),
+  status: z.enum(['negotiation', 'detected', 'confirmed', 'lost']).default('confirmed'),
+})
+
+app.get('/api/sales', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const { rows } = await query(
+    `SELECT s.id, s.status, s.amount, s.confirmed_at, s.created_at, c.name AS contact_name, o.title AS opportunity_title
+     FROM sales s LEFT JOIN contacts c ON c.id = s.contact_id LEFT JOIN opportunities o ON o.id = s.opportunity_id
+     WHERE s.company_id = $1 ORDER BY COALESCE(s.confirmed_at, s.created_at) DESC`, [scope.companyId],
+  )
+  return rows
+})
+
+app.post('/api/sales', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode registrar vendas.' })
+  const parsed = saleSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Dados da venda inválidos.', details: parsed.error.flatten().fieldErrors })
+  const input = parsed.data
+  let contactId = input.contactId ?? null
+  if (input.opportunityId) {
+    const { rows } = await query<{ contact_id: string }>('SELECT contact_id FROM opportunities WHERE id = $1 AND company_id = $2', [input.opportunityId, scope.companyId])
+    if (!rows[0]) return reply.code(404).send({ error: 'Oportunidade não encontrada.' })
+    contactId = contactId ?? rows[0].contact_id
+  }
+  const { rows } = await query(
+    `INSERT INTO sales (company_id, opportunity_id, contact_id, status, amount, evidence, confirmed_at)
+     VALUES ($1, $2, $3, $4, $5, '{"source":"manual"}'::jsonb, CASE WHEN $4 = 'confirmed' THEN now() ELSE NULL END)
+     RETURNING id, status, amount, confirmed_at`, [scope.companyId, input.opportunityId ?? null, contactId, input.status, input.amount],
+  )
+  return reply.code(201).send(rows[0])
+})
+
 const connectionSchema = z.object({
   provider: z.enum(['meta_cloud', 'uazapi']),
   channelName: z.string().min(2).max(80),
