@@ -299,6 +299,37 @@ app.get('/api/sales', { preHandler: authenticate }, async (request, reply) => {
   return rows
 })
 
+app.get('/api/conversations', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const { rows } = await query(
+    `SELECT cv.id, cv.status, cv.last_message_at, c.name AS contact_name, c.phone_e164 AS phone,
+       wc.name AS channel_name, latest.body AS last_message, latest.direction AS last_direction, latest.sent_at
+     FROM conversations cv
+     JOIN contacts c ON c.id = cv.contact_id
+     JOIN whatsapp_channels wc ON wc.id = cv.channel_id
+     LEFT JOIN LATERAL (
+       SELECT body, direction, sent_at FROM messages WHERE conversation_id = cv.id ORDER BY sent_at DESC LIMIT 1
+     ) latest ON true
+     WHERE cv.company_id = $1 ORDER BY cv.last_message_at DESC NULLS LAST, cv.created_at DESC`, [scope.companyId],
+  )
+  return rows
+})
+
+app.get('/api/conversations/:conversationId/messages', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const params = z.object({ conversationId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Conversa inválida.' })
+  const conversation = await query<{ id: string }>('SELECT id FROM conversations WHERE id = $1 AND company_id = $2', [params.data.conversationId, scope.companyId])
+  if (!conversation.rows[0]) return reply.code(404).send({ error: 'Conversa não encontrada.' })
+  const { rows } = await query(
+    `SELECT id, direction, message_type, body, sent_at FROM messages
+     WHERE company_id = $1 AND conversation_id = $2 ORDER BY sent_at ASC LIMIT 300`, [scope.companyId, params.data.conversationId],
+  )
+  return rows
+})
+
 app.post('/api/sales', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
   if (!scope) return

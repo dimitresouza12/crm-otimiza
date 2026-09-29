@@ -188,6 +188,26 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead }: { leads: L
   )
 }
 
+function LeadsPage({ leads, onSelectLead, onAddLead }: { leads: Lead[]; onSelectLead: (lead: Lead) => void; onAddLead: () => void }) {
+  const [search, setSearch] = useState('')
+  const visible = leads.filter((lead) => `${lead.name} ${lead.source}`.toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR')))
+  return <><section className="page-head crm-head"><div><span className="eyebrow">BASE DE CONTATOS</span><h1>Leads</h1><p>Todos os contatos que entraram no seu processo comercial.</p></div><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18}/> Novo lead</button></section><section className="list-panel panel"><div className="list-toolbar"><div className="search-box"><Search size={17}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar nome ou origem"/></div><span>{visible.length} contato{visible.length === 1 ? '' : 's'}</span></div><div className="data-list">{visible.map((lead) => <button type="button" className="data-row" onClick={() => onSelectLead(lead)} key={lead.id}><Avatar initials={lead.initials}/><span className="data-row__main"><b>{lead.name}</b><small>{lead.lastMessage}</small></span><span className="data-row__source">{lead.source}</span><span className={`temperature temperature--${lead.temperature.toLowerCase()}`}>{lead.temperature}</span><span className="data-row__value">{lead.value ? money(lead.value) : 'Sem valor'}</span><ChevronRight size={17}/></button>)}{!visible.length && <div className="empty-list"><UsersRound size={19}/><p>Nenhum lead encontrado.</p></div>}</div></section></>
+}
+
+type SaleRow = { id: string; status: 'negotiation' | 'detected' | 'confirmed' | 'lost'; amount: string; confirmed_at: string | null; created_at: string; contact_name: string | null; opportunity_title: string | null }
+
+function SalesPage({ sales }: { sales: SaleRow[] }) {
+  const totals = sales.reduce((accumulator, sale) => { if (sale.status === 'confirmed') accumulator.confirmed += Number(sale.amount); else if (sale.status === 'detected') accumulator.detected += Number(sale.amount); return accumulator }, { confirmed: 0, detected: 0 })
+  const statusLabel: Record<SaleRow['status'], string> = { confirmed: 'Confirmada', detected: 'Em revisão', negotiation: 'Negociação', lost: 'Perdida' }
+  return <><section className="page-head"><div><span className="eyebrow">RECEITA</span><h1>Vendas</h1><p>Separe valores negociados, detectados e confirmados.</p></div></section><section className="sales-summary"><article className="panel"><span>Receita confirmada</span><strong>{money(totals.confirmed)}</strong><small>{sales.filter((sale) => sale.status === 'confirmed').length} venda(s)</small></article><article className="panel"><span>Aguardando confirmação</span><strong>{money(totals.detected)}</strong><small>Venda detectada em conversa</small></article></section><section className="list-panel panel"><div className="list-toolbar"><b>Histórico de vendas</b><span>{sales.length} registro{sales.length === 1 ? '' : 's'}</span></div><div className="data-list">{sales.map((sale) => <div className="data-row data-row--static" key={sale.id}><span className={`sale-status sale-status--${sale.status}`}>{statusLabel[sale.status]}</span><span className="data-row__main"><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda sem contato'}</b><small>{sale.confirmed_at ? `Confirmada em ${new Date(sale.confirmed_at).toLocaleDateString('pt-BR')}` : 'Registrada no CRM'}</small></span><span className="data-row__value">{money(Number(sale.amount))}</span></div>)}{!sales.length && <div className="empty-list"><CircleDollarSign size={19}/><p>As vendas confirmadas aparecerão aqui.</p></div>}</div></section></>
+}
+
+type ConversationRow = { id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null }
+
+function ConversationsPage({ conversations }: { conversations: ConversationRow[] }) {
+  return <><section className="page-head"><div><span className="eyebrow">WHATSAPP CENTRALIZADO</span><h1>Conversas</h1><p>Consulte o histórico que chegou pelos números conectados.</p></div><span className="security-status"><ShieldCheck size={16}/> Somente leitura</span></section><section className="list-panel panel"><div className="list-toolbar"><b>Atendimentos recentes</b><span>{conversations.length} conversa{conversations.length === 1 ? '' : 's'}</span></div><div className="data-list">{conversations.map((conversation) => <article className="conversation-row" key={conversation.id}><Avatar initials={initialsFor(conversation.contact_name ?? conversation.phone)}/><div><b>{conversation.contact_name ?? conversation.phone}</b><p>{conversation.last_message ?? 'Nenhuma mensagem de texto disponível.'}</p><small>{conversation.channel_name} · {conversation.last_direction === 'outbound' ? 'Mensagem enviada' : 'Mensagem recebida'}</small></div><time>{conversation.sent_at ? new Date(conversation.sent_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</time></article>)}{!conversations.length && <div className="empty-list"><MessageCircleMore size={19}/><p>Conecte um número para começar a registrar conversas.</p></div>}</div></section></>
+}
+
 function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; eyebrow: string; title: string; text: string }) {
   return <section className="empty-page panel"><div className="empty-page__icon"><Icon size={24}/></div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p><button className="primary-button" type="button"><Plus size={18}/> Configurar agora</button></section>
 }
@@ -301,13 +321,15 @@ export default function App() {
   })
   const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; role: string } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
+  const [sales, setSales] = useState<SaleRow[]>([])
+  const [conversations, setConversations] = useState<ConversationRow[]>([])
   const [showAccess, setShowAccess] = useState(false)
   const [showLeadForm, setShowLeadForm] = useState(false)
   const [syncError, setSyncError] = useState('')
   const [stageIds, setStageIds] = useState<Record<string, string>>({})
 
   const loadWorkspace = async (activeSession: Session) => {
-    const [me, dashboard, crm] = await Promise.all([api.me(activeSession), api.dashboard(activeSession), api.crm(activeSession)])
+    const [me, dashboard, crm, salesResult, conversationsResult] = await Promise.all([api.me(activeSession), api.dashboard(activeSession), api.crm(activeSession), api.sales(activeSession), api.conversations(activeSession)])
     const freshLeads: Lead[] = crm.flatMap((stage) => stage.opportunities.map((opportunity) => ({
       id: opportunity.id,
       opportunityId: opportunity.id,
@@ -328,6 +350,8 @@ export default function App() {
     setStageIds(Object.fromEntries(crm.map((stage) => [stage.name, stage.id])))
     setMetrics({ confirmedRevenue: Number(dashboard.confirmed_revenue), confirmedSales: Number(dashboard.confirmed_sales), openLeads: Number(dashboard.open_leads), averageTicket: Number(dashboard.average_ticket), leadsThisMonth: Number(dashboard.leads_this_month) })
     setLeads(freshLeads)
+    setSales(salesResult)
+    setConversations(conversationsResult)
     setSyncError('')
   }
 
@@ -343,7 +367,7 @@ export default function App() {
 
   const signOut = () => {
     localStorage.removeItem('otimiza-crm-session')
-    setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSelectedLead(null)
+    setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSales([]); setConversations([]); setSelectedLead(null)
   }
 
   const addLead = () => {
@@ -376,11 +400,11 @@ export default function App() {
   const renderContent = () => {
     if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
+    if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
+    if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
+    if (page === 'vendas') return <SalesPage sales={sales}/>
     if (page === 'configuracoes') return <Integrations />
-    const copy: Record<Exclude<Page, 'dashboard' | 'crm' | 'configuracoes'>, [typeof Bot, string, string, string]> = {
-      leads: [UsersRound, 'BASE DE CONTATOS', 'Leads que viram relacionamento.', 'Organize dados, responsáveis e histórico de cada pessoa em um só lugar.'],
-      conversas: [MessageCircleMore, 'WHATSAPP CENTRALIZADO', 'Todas as conversas, com contexto.', 'Acompanhe o atendimento em tempo real e receba alertas antes de perder uma oportunidade.'],
-      vendas: [CircleDollarSign, 'RECEITA', 'Vendas confirmadas e em análise.', 'Separe valores negociados de pagamentos confirmados para acompanhar seu caixa com clareza.'],
+    const copy: Record<'trafego' | 'relatorios' | 'chatbot', [typeof Bot, string, string, string]> = {
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
       relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],
       chatbot: [Bot, 'CHATBOT POR REGRAS', 'Seu atendimento, do seu jeito.', 'Crie menus, palavras-chave e ações para cada número de WhatsApp sem usar IA.'],
