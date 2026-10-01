@@ -53,11 +53,13 @@ export const createEvolutionInstance = (instanceName: string, instanceToken: str
 
 export const setEvolutionWebhook = (instanceName: string, instanceToken: string, callbackUrl: string) =>
   request(`/webhook/set/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', {
-    enabled: true,
-    url: callbackUrl,
-    webhookByEvents: false,
-    webhookBase64: false,
-    events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
+    webhook: {
+      enabled: true,
+      url: callbackUrl,
+      webhookByEvents: false,
+      webhookBase64: false,
+      events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
+    },
   })
 
 export const evolutionState = async (instanceName: string, instanceToken: string) => {

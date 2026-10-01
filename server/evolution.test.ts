@@ -36,6 +36,6 @@ test('cria instância isolada, configura eventos, gera QR local e consulta estad
   assert.equal(calls[0].apikey, 'global-test-key')
   assert.deepEqual(calls[0].body, { instanceName: 'canal-1', integration: 'WHATSAPP-BAILEYS', token: 'token-do-canal', qrcode: true })
   assert.equal(calls[1].apikey, 'token-do-canal')
-  assert.deepEqual(calls[1].body?.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'])
+  assert.deepEqual((calls[1].body?.webhook as Record<string, unknown>)?.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'])
   assert.deepEqual(calls[4].body, { number: '5585999999999', text: 'Olá' })
 })
