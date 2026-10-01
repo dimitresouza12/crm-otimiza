@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
+import { createEvolutionInstance, evolutionConfigured, evolutionQr, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
 
 type Token = { userId: string; companyId: string; role: string }
 type CompanyRow = { company_id: string; role: string }
@@ -362,6 +363,8 @@ const connectionSchema = z.object({
   accessToken: z.string().min(10).max(4096).optional(),
 })
 
+const evolutionConnectionSchema = z.object({ channelName: z.string().trim().min(2).max(80) })
+
 const chatbotPlan = (plan: string) => plan === 'chatbot'
 
 app.get('/api/integrations/whatsapp', { preHandler: authenticate }, async (request, reply) => {
@@ -432,6 +435,134 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
   return reply.code(201).send({ ...result, webhookPath, webhookConfigured, setupError })
 })
 
+const evolutionConnection = async (channelId: string, companyId: string) => {
+  const { rows } = await query<{ id: string; channel_id: string; external_account_id: string; access_token_encrypted: string; webhook_secret: string; status: string }>(
+    `SELECT wc.id, wc.channel_id, wc.external_account_id, wc.access_token_encrypted, wc.webhook_secret, c.status
+     FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
+     WHERE c.id = $1 AND c.company_id = $2 AND wc.provider = 'evolution'`, [channelId, companyId],
+  )
+  return rows[0]
+}
+
+const setupEvolution = async (connection: NonNullable<Awaited<ReturnType<typeof evolutionConnection>>>, createFirst = false) => {
+  const instanceToken = decryptSecret(connection.access_token_encrypted)
+  if (createFirst) {
+    await createEvolutionInstance(connection.external_account_id, instanceToken)
+  } else {
+    try {
+      await evolutionState(connection.external_account_id, instanceToken)
+    } catch (error) {
+      if (!(error instanceof EvolutionError) || error.status !== 404) throw error
+      await createEvolutionInstance(connection.external_account_id, instanceToken)
+    }
+  }
+  const callback = `${config.crmPublicUrl}/webhooks/evolution/${connection.id}?secret=${connection.webhook_secret}`
+  await setEvolutionWebhook(connection.external_account_id, instanceToken, callback)
+  const state = await evolutionState(connection.external_account_id, instanceToken)
+  const status = state === 'open' ? 'connected' : 'pending'
+  await query(`UPDATE whatsapp_channels SET status = $1, updated_at = now() WHERE id = $2`, [status, connection.channel_id])
+  return status
+}
+
+app.post('/api/integrations/evolution', { preHandler: authenticate, config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode conectar canais.' })
+  if (!evolutionConfigured()) return reply.code(503).send({ error: 'A Evolution ainda não foi configurada no serviço do CRM.' })
+  const parsed = evolutionConnectionSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Informe o nome do canal.' })
+  const instanceName = `otimiza-${scope.companyId.replace(/-/g, '').slice(0, 8)}-${randomUUID().slice(0, 8)}`
+  const instanceToken = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '')
+  let created: { channelId: string; connectionId: string }
+  try {
+    created = await transaction(async (client) => {
+      const company = await client.query<{ plan: string }>('SELECT plan FROM companies WHERE id = $1 FOR UPDATE', [scope.companyId])
+      const limit = company.rows[0]?.plan === 'essential' ? 1 : 3
+      const count = await client.query<{ total: string }>('SELECT count(*)::text AS total FROM whatsapp_channels WHERE company_id = $1', [scope.companyId])
+      if (Number(count.rows[0]?.total ?? 0) >= limit) throw new Error('CHANNEL_LIMIT')
+      const channel = await client.query<{ id: string }>(
+        `INSERT INTO whatsapp_channels (company_id, pipeline_id, name, status)
+         VALUES ($1, (SELECT id FROM pipelines WHERE company_id = $1 AND is_default = true LIMIT 1), $2, 'pending') RETURNING id`,
+        [scope.companyId, parsed.data.channelName],
+      )
+      const connection = await client.query<{ id: string }>(
+        `INSERT INTO whatsapp_connections (channel_id, provider, external_account_id, access_token_encrypted)
+         VALUES ($1, 'evolution', $2, $3) RETURNING id`,
+        [channel.rows[0].id, instanceName, encryptSecret(instanceToken)],
+      )
+      return { channelId: channel.rows[0].id, connectionId: connection.rows[0].id }
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'CHANNEL_LIMIT') return reply.code(409).send({ error: 'Seu plano já atingiu o limite de números de WhatsApp.' })
+    if (typeof error === 'object' && error && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'Já existe um canal com esse nome.' })
+    throw error
+  }
+  const connection = await evolutionConnection(created.channelId, scope.companyId)
+  if (!connection) throw new Error('A conexão Evolution não foi criada.')
+  try {
+    const status = await setupEvolution(connection, true)
+    return reply.code(201).send({ ...created, status })
+  } catch (error) {
+    app.log.error({ error, channelId: created.channelId }, 'Falha ao configurar instância Evolution')
+    await query(`UPDATE whatsapp_channels SET status = 'error', updated_at = now() WHERE id = $1`, [created.channelId])
+    return reply.code(201).send({ ...created, status: 'error', setupError: 'O canal foi salvo, mas a Evolution não concluiu a conexão. Use Tentar novamente.' })
+  }
+})
+
+app.post('/api/integrations/evolution/:channelId/retry', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode alterar canais.' })
+  const params = z.object({ channelId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Canal inválido.' })
+  const connection = await evolutionConnection(params.data.channelId, scope.companyId)
+  if (!connection) return reply.code(404).send({ error: 'Canal Evolution não encontrado.' })
+  try {
+    return { status: await setupEvolution(connection) }
+  } catch (error) {
+    app.log.error({ error, channelId: connection.channel_id }, 'Falha ao reconectar Evolution')
+    await query(`UPDATE whatsapp_channels SET status = 'error', updated_at = now() WHERE id = $1`, [connection.channel_id])
+    return reply.code(502).send({ error: 'A Evolution não respondeu à tentativa de conexão.' })
+  }
+})
+
+app.get('/api/integrations/evolution/:channelId/status', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const params = z.object({ channelId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Canal inválido.' })
+  const connection = await evolutionConnection(params.data.channelId, scope.companyId)
+  if (!connection) return reply.code(404).send({ error: 'Canal Evolution não encontrado.' })
+  try {
+    const state = await evolutionState(connection.external_account_id, decryptSecret(connection.access_token_encrypted))
+    const status = state === 'open' ? 'connected' : state === 'connecting' ? 'pending' : 'disconnected'
+    if (status !== connection.status) await query(`UPDATE whatsapp_channels SET status = $1, updated_at = now() WHERE id = $2`, [status, connection.channel_id])
+    return { status }
+  } catch (error) {
+    app.log.warn({ error, channelId: connection.channel_id }, 'Falha ao consultar estado Evolution')
+    return reply.code(502).send({ error: 'Não foi possível consultar a Evolution agora.' })
+  }
+})
+
+app.get('/api/integrations/evolution/:channelId/qr', { preHandler: authenticate, config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode conectar canais.' })
+  const params = z.object({ channelId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Canal inválido.' })
+  const connection = await evolutionConnection(params.data.channelId, scope.companyId)
+  if (!connection) return reply.code(404).send({ error: 'Canal Evolution não encontrado.' })
+  try {
+    const token = decryptSecret(connection.access_token_encrypted)
+    const state = await evolutionState(connection.external_account_id, token)
+    if (state === 'open') return { status: 'connected', qrCode: null }
+    return { status: 'pending', qrCode: await evolutionQr(connection.external_account_id, token) }
+  } catch (error) {
+    app.log.warn({ error, channelId: connection.channel_id }, 'Falha ao gerar QR Evolution')
+    return reply.code(502).send({ error: 'Não foi possível gerar o QR Code. Tente novamente.' })
+  }
+})
+
 app.post('/api/integrations/uazapi/request', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
   if (!scope) return
@@ -472,7 +603,7 @@ app.get('/api/chatbot', { preHandler: authenticate }, async (request, reply) => 
   if (!scope) return
   const [settings, channels, rules] = await Promise.all([
     query<{ is_active: boolean; welcome_message: string | null; fallback_message: string | null }>('SELECT is_active, welcome_message, fallback_message FROM chatbot_settings WHERE company_id = $1', [scope.companyId]),
-    query<{ id: string; name: string; phone_number: string | null; status: string }>(`SELECT c.id, c.name, c.phone_number, c.status FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.company_id = $1 AND wc.provider = 'uazapi' ORDER BY c.created_at DESC`, [scope.companyId]),
+    query<{ id: string; name: string; phone_number: string | null; status: string; provider: string }>(`SELECT c.id, c.name, c.phone_number, c.status, wc.provider FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.company_id = $1 AND wc.provider IN ('uazapi', 'evolution') ORDER BY c.created_at DESC`, [scope.companyId]),
     query<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }>('SELECT id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position FROM chatbot_rules WHERE company_id = $1 ORDER BY position, created_at', [scope.companyId]),
   ])
   return { settings: settings.rows[0] ?? { is_active: false, welcome_message: '', fallback_message: '' }, channels: channels.rows, rules: rules.rows }
@@ -501,8 +632,8 @@ app.post('/api/chatbot/rules', { preHandler: authenticate }, async (request, rep
   const parsed = chatbotRuleSchema.safeParse(request.body)
   if (!parsed.success) return reply.code(400).send({ error: 'Regra do chatbot inválida.' })
   const input = parsed.data
-  const channel = await query<{ id: string }>(`SELECT c.id FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.id = $1 AND c.company_id = $2 AND wc.provider = 'uazapi'`, [input.channelId, scope.companyId])
-  if (!channel.rows[0]) return reply.code(404).send({ error: 'Número UAZAPI não encontrado.' })
+  const channel = await query<{ id: string }>(`SELECT c.id FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.id = $1 AND c.company_id = $2 AND wc.provider IN ('uazapi', 'evolution')`, [input.channelId, scope.companyId])
+  if (!channel.rows[0]) return reply.code(404).send({ error: 'Número WhatsApp não encontrado.' })
   if (input.triggerType === 'keyword' && !input.triggerValue?.trim()) return reply.code(400).send({ error: 'Informe a palavra-chave da regra.' })
   const { rows } = await query(
     `INSERT INTO chatbot_rules (company_id, channel_id, name, trigger_type, trigger_value, response_text, position)
@@ -532,7 +663,7 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const pickText = (value: unknown): string | null => {
   if (typeof value === 'string' && value.trim()) return value.trim()
   const input = record(value)
-  for (const key of ['body', 'text', 'conversation', 'caption']) {
+  for (const key of ['body', 'text', 'conversation', 'caption', 'extendedTextMessage', 'ephemeralMessage', 'viewOnceMessage', 'imageMessage', 'videoMessage', 'message']) {
     const result = pickText(input[key])
     if (result) return result
   }
@@ -557,12 +688,15 @@ const ensureInboundOpportunity = async ({ companyId, channelId, contactId, title
   )
 }
 
-const saveUazapiMessage = async (connection: { id: string; company_id: string; channel_id: string }, payload: Record<string, unknown>) => {
+const saveWhatsAppMessage = async (connection: { id: string; company_id: string; channel_id: string }, payload: Record<string, unknown>) => {
   const data = record(payload.data ?? payload.message ?? payload)
   const key = record(data.key)
   const message = record(data.message)
-  const remoteId = String(key.remoteJid ?? data.remoteJid ?? data.chatid ?? data.chatId ?? data.from ?? data.number ?? '')
-  const isGroup = Boolean(data.wa_isGroup ?? data.isGroup) || remoteId.endsWith('@g.us')
+  const remoteCandidates = [key.remoteJid, key.remoteJidAlt, data.remoteJid, data.chatid, data.chatId, data.from, data.number]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+  const remoteId = remoteCandidates.find((value) => value.endsWith('@s.whatsapp.net') || value.endsWith('@c.us'))
+    ?? remoteCandidates.find((value) => !value.endsWith('@lid')) ?? ''
+  const isGroup = Boolean(data.wa_isGroup ?? data.isGroup) || remoteId.endsWith('@g.us') || remoteId.endsWith('@broadcast')
   const phone = remoteId.split('@')[0].replace(/\D/g, '')
   const externalId = String(key.id ?? data.id ?? data.messageId ?? '')
   if (!phone || phone.length < 8 || !externalId || isGroup) return false
@@ -593,10 +727,12 @@ const saveUazapiMessage = async (connection: { id: string; company_id: string; c
   return { inbound: !fromMe, isNew: Boolean(insertedMessage.rows[0]), body, phone, conversationId: conversation.rows[0].id }
 }
 
-const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string }) => {
+const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string }) => {
   const metadata = record(connection.metadata)
   const serverUrl = typeof metadata.serverUrl === 'string' ? metadata.serverUrl.replace(/\/$/, '') : ''
-  if (!serverUrl || !connection.access_token_encrypted) return
+  if (!connection.access_token_encrypted) return
+  if (connection.provider === 'uazapi' && !serverUrl) return
+  if (connection.provider === 'evolution' && !connection.external_account_id) return
   const { rows: settingsRows } = await query<{ is_active: boolean; fallback_message: string | null }>('SELECT is_active, fallback_message FROM chatbot_settings WHERE company_id = $1', [connection.company_id])
   const settings = settingsRows[0]
   if (!settings?.is_active) return
@@ -609,13 +745,17 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
     ?? (Number(countRows[0]?.total ?? 0) === 1 ? rules.find((item) => item.trigger_type === 'first_message') : undefined)
   const responseText = rule?.response_text ?? settings.fallback_message
   if (!responseText?.trim()) return
-  const response = await fetch(`${serverUrl}/send/text`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', token: decryptSecret(connection.access_token_encrypted) },
-    body: JSON.stringify({ number: incoming.phone, text: responseText }),
-    signal: AbortSignal.timeout(10_000),
-  })
-  if (!response.ok) throw new Error(`UAZAPI respondeu ${response.status} ao enviar mensagem do chatbot`)
+  if (connection.provider === 'evolution') {
+    await evolutionSendText(connection.external_account_id!, decryptSecret(connection.access_token_encrypted), incoming.phone, responseText)
+  } else {
+    const response = await fetch(`${serverUrl}/send/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', token: decryptSecret(connection.access_token_encrypted) },
+      body: JSON.stringify({ number: incoming.phone, text: responseText }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) throw new Error(`UAZAPI respondeu ${response.status} ao enviar mensagem do chatbot`)
+  }
   await query(
     `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload)
      VALUES ($1, $2, $3, 'outbound', 'text', $4, now(), $5::jsonb)`,
@@ -700,8 +840,8 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   const { connectionId } = request.params as { connectionId: string }
   const querySecret = (request.query as { secret?: string }).secret
   const sentSecret = request.headers['x-otimiza-webhook-secret'] ?? querySecret
-  const { rows } = await query<{ id: string; company_id: string; channel_id: string; webhook_secret: string; access_token_encrypted: string | null; metadata: unknown }>(
-    `SELECT wc.id, c.company_id, wc.channel_id, wc.webhook_secret, wc.access_token_encrypted, wc.metadata FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
+  const { rows } = await query<{ id: string; company_id: string; channel_id: string; provider: string; webhook_secret: string; access_token_encrypted: string | null; metadata: unknown }>(
+    `SELECT wc.id, c.company_id, wc.channel_id, wc.provider, wc.webhook_secret, wc.access_token_encrypted, wc.metadata FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
      WHERE wc.id = $1 AND wc.provider = 'uazapi'`, [connectionId],
   )
   const connection = rows[0]
@@ -715,7 +855,7 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   )
   const event = String(payload.event ?? payload.type ?? '').toLowerCase()
   if (event.includes('message') || record(payload.data ?? payload.message).key || record(payload.data ?? payload.message).message) {
-    const incoming = await saveUazapiMessage(connection, payload)
+    const incoming = await saveWhatsAppMessage(connection, payload)
     if (incoming && incoming.inbound && incoming.isNew) void sendChatbotResponse(connection, incoming).catch((error) => app.log.error(error, 'Não foi possível enviar resposta do chatbot'))
   }
   if (event.includes('connection')) {
@@ -724,6 +864,51 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   }
   await query('UPDATE whatsapp_connections SET last_event_at = now(), updated_at = now() WHERE id = $1', [connection.id])
   return reply.code(202).send({ received: true })
+})
+
+app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, async (request, reply) => {
+  const params = z.object({ connectionId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Conexão inválida.' })
+  const sentSecret = request.headers['x-otimiza-webhook-secret'] ?? (request.query as { secret?: string }).secret
+  const { rows } = await query<{ id: string; company_id: string; channel_id: string; provider: string; external_account_id: string; webhook_secret: string; access_token_encrypted: string | null; metadata: unknown }>(
+    `SELECT wc.id, c.company_id, wc.channel_id, wc.provider, wc.external_account_id, wc.webhook_secret, wc.access_token_encrypted, wc.metadata
+     FROM whatsapp_connections wc JOIN whatsapp_channels c ON c.id = wc.channel_id
+     WHERE wc.id = $1 AND wc.provider = 'evolution'`, [params.data.connectionId],
+  )
+  const connection = rows[0]
+  if (!connection || typeof sentSecret !== 'string' || !safeEqual(sentSecret, connection.webhook_secret)) return reply.code(401).send({ error: 'Webhook não autorizado.' })
+  const payload = record(request.body)
+  if (payload.instance !== connection.external_account_id) return reply.code(403).send({ error: 'Instância inválida.' })
+  const event = String(payload.event ?? '').toLowerCase().replace(/[^a-z]/g, '')
+  const data = record(payload.data)
+  const messageId = String(record(data.key).id ?? data.id ?? '')
+  const externalEventId = `${connection.id}:${event}:${messageId || createHmac('sha256', connection.webhook_secret).update(JSON.stringify(payload)).digest('hex')}`
+  const inserted = await query<{ id: string }>(
+    `INSERT INTO integration_events (company_id, connection_id, provider, external_event_id, event_type, payload)
+     VALUES ($1, $2, 'evolution', $3, $4, $5::jsonb)
+     ON CONFLICT (provider, external_event_id) DO UPDATE SET received_at = now() RETURNING id`,
+    [connection.company_id, connection.id, externalEventId, event, JSON.stringify(payload)],
+  )
+  try {
+    if (event === 'messagesupsert') {
+      const incoming = await saveWhatsAppMessage(connection, payload)
+      if (incoming && incoming.inbound && incoming.isNew) {
+        void sendChatbotResponse(connection, incoming).catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
+      }
+    } else if (event === 'connectionupdate') {
+      const state = String(data.state ?? data.status ?? '').toLowerCase()
+      const status = state === 'open' || state === 'connected' ? 'connected' : state === 'connecting' ? 'pending' : 'disconnected'
+      await query(`UPDATE whatsapp_channels SET status = $1, updated_at = now() WHERE id = $2`, [status, connection.channel_id])
+      if (status === 'connected') await query('UPDATE whatsapp_connections SET connected_at = COALESCE(connected_at, now()) WHERE id = $1', [connection.id])
+    }
+    await query('UPDATE integration_events SET processed_at = now(), error = NULL WHERE id = $1', [inserted.rows[0].id])
+    await query('UPDATE whatsapp_connections SET last_event_at = now(), updated_at = now() WHERE id = $1', [connection.id])
+    return reply.code(200).send({ received: true })
+  } catch (error) {
+    app.log.error({ error, connectionId: connection.id }, 'Falha ao processar evento Evolution')
+    await query('UPDATE integration_events SET error = $2 WHERE id = $1', [inserted.rows[0].id, error instanceof Error ? error.message.slice(0, 300) : 'Erro inesperado'])
+    return reply.code(500).send({ error: 'Não foi possível processar o evento.' })
+  }
 })
 
 app.post('/webhooks/n8n/:companyId', async (request, reply) => {

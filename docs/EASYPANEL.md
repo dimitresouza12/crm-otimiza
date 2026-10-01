@@ -29,6 +29,9 @@ Crie um serviço a partir deste repositório do GitHub usando o `Dockerfile` da 
 | `META_APP_ID` | ID do app Meta, quando ele for criado |
 | `META_APP_SECRET` | segredo do app Meta |
 | `N8N_WEBHOOK_SECRET` | `openssl rand -hex 32` |
+| `CRM_PUBLIC_URL` | URL pública HTTPS do CRM, por exemplo `https://crm.seudominio.com` |
+| `EVOLUTION_API_URL` | URL interna ou HTTPS da Evolution instalada na VPS |
+| `EVOLUTION_API_KEY` | chave global da Evolution, guardada somente no serviço CRM |
 | `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` quando o domínio estiver ativo |
 
 O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. Quando o subdomínio estiver apontado, associe `crm.SEUDOMINIO.com` ao serviço com HTTPS ativo.
@@ -43,9 +46,13 @@ No Meta for Developers, crie um aplicativo Business, adicione WhatsApp e configu
 
 O endpoint valida o desafio de assinatura e valida `X-Hub-Signature-256` quando `META_APP_SECRET` estiver configurado. Para o cliente conectar o próprio número, ative o fluxo **Embedded Signup** no app Meta e informe `META_APP_ID` e `META_APP_SECRET` na API.
 
-## 4. UAZAPI e n8n
+## 4. Evolution, UAZAPI e n8n
 
-O WhatsApp Oficial da Meta é o canal usado por clientes que somente acompanham os atendimentos no CRM. No plano Chatbot, o cliente informa sua Server URL, token e instância UAZAPI no CRM; o token é armazenado criptografado e o webhook é configurado automaticamente. No plano Automação, a UAZAPI é conectada pela equipe Otimiza AI após o diagnóstico e a implantação. A API retorna um caminho de webhook próprio e um segredo por conexão.
+Com `CRM_PUBLIC_URL`, `EVOLUTION_API_URL` e `EVOLUTION_API_KEY` configurados, o cliente abre **Configurações → WhatsApp por QR Code**. O CRM cria uma instância Evolution com token próprio, configura o webhook, mostra o QR Code e acompanha o estado da conexão. Cada canal pertence a uma empresa no banco do CRM. A chave global nunca aparece no navegador.
+
+O webhook da Evolution recebe `MESSAGES_UPSERT` e `CONNECTION_UPDATE`. As mensagens recebidas e enviadas atualizam contatos, conversas e o funil. No plano Chatbot, as regras por número também podem responder pela Evolution, se o chatbot estiver ativado. Verifique a versão Evolution instalada antes de ligar clientes reais: os endpoints implementados seguem a API Evolution v2 (`/instance/create`, `/instance/connect/{instance}`, `/instance/connectionState/{instance}`, `/webhook/set/{instance}` e `/message/sendText/{instance}`).
+
+O cliente também pode usar o WhatsApp Oficial da Meta para acompanhar atendimentos. No plano Chatbot, ele pode conectar uma instância UAZAPI existente informando Server URL, token e nome da instância; o token é armazenado criptografado e o webhook é configurado automaticamente. No plano Automação, a UAZAPI é conectada pela equipe Otimiza AI após o diagnóstico e a implantação. A API retorna um caminho de webhook próprio e um segredo por conexão.
 
 Os fluxos n8n enviam eventos para:
 

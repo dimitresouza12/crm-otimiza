@@ -213,7 +213,7 @@ function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; e
 }
 
 function Integrations({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void }) {
-  const [provider, setProvider] = useState<'meta' | 'uazapi' | 'ads'>('meta')
+  const [provider, setProvider] = useState<'evolution' | 'meta' | 'uazapi' | 'ads'>('evolution')
   const [started, setStarted] = useState(false)
   const [channelName, setChannelName] = useState('Comercial')
   const [phoneNumber, setPhoneNumber] = useState('')
@@ -222,7 +222,9 @@ function Integrations({ session, account, onRequestAccess }: { session: Session 
   const [connectionError, setConnectionError] = useState('')
   const [connecting, setConnecting] = useState(false)
   const uazapiEnabled = Boolean(account?.uses_automation || account?.plan === 'chatbot' || account?.plan === 'automation')
-  const detail = provider === 'meta'
+  const detail = provider === 'evolution'
+    ? { eyebrow: 'CONEXÃO POR QR CODE', title: 'Conecte seu WhatsApp', text: 'Use a Evolution hospedada pela Otimiza AI para acompanhar conversas e leads no CRM. As respostas automáticas só são ativadas por você no plano Chatbot.', action: 'Conectar pela Evolution', steps: ['Dê um nome ao seu canal', 'Escaneie o QR Code com o WhatsApp', 'Acompanhe conversas e leads no CRM'] }
+    : provider === 'meta'
     ? { eyebrow: 'WHATSAPP BUSINESS PLATFORM', title: 'Conecte seu WhatsApp Oficial', text: 'Para acompanhar atendimento sem chatbot ou automação, conecte o número pela API Oficial da Meta.', action: 'Conectar com a Meta', steps: ['Entre na conta Meta da sua empresa', 'Escolha a conta do WhatsApp Business', 'Selecione o número que deseja acompanhar'] }
     : provider === 'uazapi'
       ? { eyebrow: 'CHATBOT E AUTOMAÇÃO OTIMIZA AI', title: uazapiEnabled ? 'Conecte seu número com a equipe' : 'Adicione chatbot ou automação', text: uazapiEnabled ? 'A equipe Otimiza AI conecta a instância UAZAPI e mantém o chatbot ou as automações sincronizados com o CRM.' : 'A UAZAPI é usada apenas quando sua empresa possui Chatbot ou Automação Otimiza AI.', action: uazapiEnabled ? 'Solicitar conexão da equipe' : 'Ver solução Chatbot e Automação', steps: uazapiEnabled ? ['Solicite a conexão do número', 'A equipe valida a instância UAZAPI', 'CRM, chatbot e automações usam o mesmo canal'] : ['Use o WhatsApp Oficial para acompanhamento', 'Ative Chatbot ou Automação quando quiser responder por regras ou fluxos', 'A equipe conecta a UAZAPI na ativação'] }
@@ -236,19 +238,91 @@ function Integrations({ session, account, onRequestAccess }: { session: Session 
   return <>
     <section className="page-head integration-head"><div><span className="eyebrow">CONEXÕES</span><h1>Integrações</h1><p>Conecte seus canais e acompanhe os resultados em um único lugar.</p></div><span className="security-status"><ShieldCheck size={16}/> Dados protegidos</span></section>
     <section className="integration-layout"><div className="integration-list">
+      <button className={`integration-item ${provider === 'evolution' ? 'is-current' : ''}`} onClick={() => { setProvider('evolution'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp por QR Code</b><small>Evolution · conexão em poucos passos</small></span><em>Comece aqui</em><ChevronRight size={17}/></button>
       <button className={`integration-item ${provider === 'meta' ? 'is-current' : ''}`} onClick={() => { setProvider('meta'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp Oficial</b><small>Para atendimento sem automação</small></span><em>Recomendado</em><ChevronRight size={17}/></button>
       <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => { setProvider('uazapi'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Chatbot e automação</b><small>UAZAPI conectada pela equipe</small></span><em className="integration-item__state">{uazapiEnabled ? 'Disponível' : 'Opcional'}</em><ChevronRight size={17}/></button>
       <button className={`integration-item ${provider === 'ads' ? 'is-current' : ''}`} onClick={() => { setProvider('ads'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--ads"><TrendingUp size={20}/></span><span><b>Meta Ads</b><small>Investimento e vendas atribuídas</small></span><ChevronRight size={17}/></button>
     </div><article className="connection-detail panel"><span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p><div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-      {!started ? <button className="primary-button" type="button" disabled={connecting} onClick={() => void requestConnection()}><Link2 size={17}/>{connecting ? 'Enviando...' : detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : provider === 'uazapi' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>{uazapiEnabled ? 'Solicitação registrada' : 'WhatsApp Oficial recomendado'}</b><p>{uazapiEnabled ? 'Nossa equipe fará a configuração técnica da instância UAZAPI.' : 'Para acompanhar atendimentos sem chatbot ou automação, conecte seu número usando a API Oficial da Meta.'}</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: 'meta_cloud', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId, accessToken }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label>{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
-      {connectionError && !started && <p className="form-error">{connectionError}</p>}<small className="connection-note">{provider === 'meta' ? 'A API Oficial organiza conversas e dados sem ativar respostas automáticas.' : provider === 'uazapi' ? 'As credenciais e os webhooks da UAZAPI são configurados pela equipe Otimiza AI.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
+      {provider === 'evolution' ? <EvolutionConnectionPanel session={session} onRequestAccess={onRequestAccess} /> : !started ? <button className="primary-button" type="button" disabled={connecting} onClick={() => void requestConnection()}><Link2 size={17}/>{connecting ? 'Enviando...' : detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : provider === 'uazapi' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>{uazapiEnabled ? 'Solicitação registrada' : 'WhatsApp Oficial recomendado'}</b><p>{uazapiEnabled ? 'Nossa equipe fará a configuração técnica da instância UAZAPI.' : 'Para acompanhar atendimentos sem chatbot ou automação, conecte seu número usando a API Oficial da Meta.'}</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: 'meta_cloud', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId, accessToken }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label>{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
+      {connectionError && !started && <p className="form-error">{connectionError}</p>}<small className="connection-note">{provider === 'evolution' ? 'O canal usa a Evolution da Otimiza AI. O QR Code aparece apenas na sua conta.' : provider === 'meta' ? 'A API Oficial organiza conversas e dados sem ativar respostas automáticas.' : provider === 'uazapi' ? 'As credenciais e os webhooks da UAZAPI são configurados pela equipe Otimiza AI.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
     </article></section>
   </>
 }
 
+type WhatsAppConnection = Awaited<ReturnType<typeof api.whatsappConnections>>[number]
+
+function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Session | null; onRequestAccess: () => void }) {
+  const [channels, setChannels] = useState<WhatsAppConnection[]>([])
+  const [channelName, setChannelName] = useState('Comercial')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [status, setStatus] = useState<'pending' | 'connected' | 'disconnected' | 'error'>('pending')
+  const [qrCode, setQrCode] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const reload = async () => {
+    if (!session) return
+    const result = (await api.whatsappConnections(session)).filter((channel) => channel.provider === 'evolution')
+    setChannels(result)
+    if (!selectedId && result[0]) { setSelectedId(result[0].id); setStatus(result[0].status) }
+  }
+  useEffect(() => { void reload().catch(() => setError('Não foi possível carregar os canais.')) }, [session])
+  useEffect(() => {
+    if (!session || !selectedId || status === 'connected' || status === 'error') return
+    const timer = window.setInterval(() => {
+      void api.evolutionStatus(session, selectedId).then((result) => {
+        setStatus(result.status)
+        if (result.status === 'connected') { setQrCode(null); void reload() }
+      }).catch(() => setError('A conexão com a Evolution está indisponível no momento.'))
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [session, selectedId, status])
+
+  const showQr = async (channelId: string) => {
+    if (!session) return onRequestAccess()
+    setBusy(true); setError(''); setQrCode(null)
+    try {
+      const result = await api.evolutionQr(session, channelId)
+      setStatus(result.status)
+      setQrCode(result.qrCode)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível gerar o QR Code.') } finally { setBusy(false) }
+  }
+  const createChannel = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!session) return onRequestAccess()
+    setBusy(true); setError(''); setQrCode(null)
+    try {
+      const result = await api.createEvolution(session, channelName)
+      setSelectedId(result.channelId); setStatus(result.status)
+      await reload()
+      if (result.setupError) setError(result.setupError)
+      else if (result.status !== 'connected') await showQr(result.channelId)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar o canal.') } finally { setBusy(false) }
+  }
+  const retry = async () => {
+    if (!session || !selectedId) return
+    setBusy(true); setError('')
+    try {
+      const result = await api.retryEvolution(session, selectedId)
+      setStatus(result.status)
+      await reload()
+      if (result.status !== 'connected') await showQr(selectedId)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível reconectar.') } finally { setBusy(false) }
+  }
+  const selected = channels.find((channel) => channel.id === selectedId)
+  return <div className="evolution-panel">
+    {!session ? <button className="primary-button" type="button" onClick={onRequestAccess}>Entrar para conectar <ArrowRight size={16}/></button> : <>
+      {channels.length > 0 && <div className="evolution-channels">{channels.map((channel) => <button key={channel.id} className={selectedId === channel.id ? 'is-current' : ''} type="button" onClick={() => { setSelectedId(channel.id); setStatus(channel.status); setQrCode(null); setError('') }}><span className={`evolution-indicator evolution-indicator--${channel.status}`}/><span><b>{channel.name}</b><small>{channel.status === 'connected' ? 'Conectado' : channel.status === 'error' ? 'Requer atenção' : 'Aguardando conexão'}</small></span></button>)}</div>}
+      {selected && <div className="evolution-current"><b>{selected.name}</b><span>{status === 'connected' ? 'WhatsApp conectado. As novas mensagens serão registradas no CRM.' : 'Abra WhatsApp > Aparelhos conectados > Conectar aparelho e escaneie o código.'}</span>{qrCode && status !== 'connected' && <img src={qrCode} alt="QR Code para conectar o WhatsApp"/>}<div className="evolution-actions">{status === 'error' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void retry()}>Tentar novamente</button> : status !== 'connected' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void showQr(selected.id)}>{busy ? 'Gerando...' : qrCode ? 'Atualizar QR Code' : 'Mostrar QR Code'}</button> : <span className="security-status"><CheckCircle2 size={15}/> Conectado</span>}</div></div>}
+      <form className="connection-form evolution-create" onSubmit={(event) => void createChannel(event)}><label>Adicionar número<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required minLength={2} placeholder="Ex.: Comercial"/></label><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Preparando...' : 'Criar conexão'} <Plus size={16}/></button></form>
+      {error && <p className="form-error">{error}</p>}
+    </>}
+  </div>
+}
+
 type ChatbotData = Awaited<ReturnType<typeof api.chatbot>>
 
-function ChatbotPage({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string } | null; onRequestAccess: () => void }) {
+function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrations }: { session: Session | null; account: { plan: string } | null; onRequestAccess: () => void; onOpenIntegrations: () => void }) {
   const [data, setData] = useState<ChatbotData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -261,26 +335,47 @@ function ChatbotPage({ session, account, onRequestAccess }: { session: Session |
   const [ruleType, setRuleType] = useState<'keyword' | 'first_message'>('first_message')
   const [keyword, setKeyword] = useState('')
   const [response, setResponse] = useState('Olá! Como posso te ajudar?')
+  const [selectedChannelId, setSelectedChannelId] = useState('')
   const load = async () => {
     if (!session) return
     setLoading(true); setError('')
-    try { setData(await api.chatbot(session)) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') } finally { setLoading(false) }
+    try { const result = await api.chatbot(session); setData(result); setSelectedChannelId((current) => result.channels.some((channel) => channel.id === current) ? current : result.channels[0]?.id ?? '') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') } finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [session])
-  if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar um número UAZAPI e criar regras para o seu chatbot.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16}/></button></section>
-  if (account?.plan !== 'chatbot') return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">PLANO CHATBOT</span><h1>Chatbot configurável por número.</h1><p>Este recurso permite criar respostas por palavra chave e mensagem inicial usando sua instância UAZAPI.</p><button className="primary-button" type="button" onClick={() => setError('Solicite à equipe Otimiza AI a ativação do plano Chatbot para sua empresa.')}>Ativar plano Chatbot <ArrowRight size={16}/></button>{error && <p className="form-error">{error}</p>}</section>
+  if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar seu WhatsApp e criar regras para o chatbot.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16}/></button></section>
+  if (account?.plan !== 'chatbot') return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">PLANO CHATBOT</span><h1>Chatbot configurável por número.</h1><p>Crie respostas por palavra chave e mensagem inicial em canais Evolution ou UAZAPI.</p><button className="primary-button" type="button" onClick={() => setError('Solicite à equipe Otimiza AI a ativação do plano Chatbot para sua empresa.')}>Ativar plano Chatbot <ArrowRight size={16}/></button>{error && <p className="form-error">{error}</p>}</section>
   const settings = data?.settings ?? { is_active: false, welcome_message: '', fallback_message: '' }
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault(); if (!session || !settings) return
     setLoading(true); setError('')
     try { await api.saveChatbotSettings(session, { isActive: settings.is_active, welcomeMessage: settings.welcome_message ?? '', fallbackMessage: settings.fallback_message ?? '' }); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o chatbot.') } finally { setLoading(false) }
   }
-  return <><section className="page-head chatbot-head"><div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Chatbot</h1><p>Configure respostas do seu número UAZAPI sem precisar de IA.</p></div><span className={`security-status ${settings?.is_active ? '' : 'security-status--neutral'}`}><Bot size={16}/>{settings?.is_active ? 'Chatbot ativo' : 'Chatbot pausado'}</span></section>
+  return <><section className="page-head chatbot-head"><div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Chatbot</h1><p>Configure respostas para cada número Evolution ou UAZAPI, sem precisar de IA.</p></div><span className={`security-status ${settings?.is_active ? '' : 'security-status--neutral'}`}><Bot size={16}/>{settings?.is_active ? 'Chatbot ativo' : 'Chatbot pausado'}</span></section>
     {!data ? <section className="panel chatbot-loading">{loading ? 'Carregando configurações...' : error}</section> : <section className="chatbot-layout">
       <article className="panel chatbot-panel chatbot-panel--settings"><div className="panel__header"><div><span className="eyebrow">NÚMERO E RESPOSTAS</span><h2>Configuração do chatbot</h2></div></div>
+        {!data.channels.length && <div className="chatbot-evolution-cta"><p>Conecte seu WhatsApp por QR Code usando a Evolution da Otimiza AI.</p><button className="primary-button" type="button" onClick={onOpenIntegrations}>Conectar com QR Code <ArrowRight size={16}/></button></div>}
         {!data.channels.length ? <form className="form-stack chatbot-form" onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { const result = await api.connectWhatsapp(session, { provider: 'uazapi', channelName, phoneNumber: phone || undefined, externalAccountId: instance, serverUrl, accessToken: token }); if (result.setupError) setError(result.setupError); await load(); setToken('') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível conectar a UAZAPI.') } finally { setLoading(false) } }}><p className="chatbot-intro">Conecte uma instância UAZAPI. O CRM guarda o token de forma criptografada e configura o webhook automaticamente.</p><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp <small>opcional</small><input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="5585999999999"/></label><label>Server URL da UAZAPI<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} type="url" required placeholder="https://sua-api.exemplo.com"/></label><label>Nome da instância<input value={instance} onChange={(event) => setInstance(event.target.value)} required placeholder="Ex.: comercial-principal"/></label><label>Token da instância<input value={token} onChange={(event) => setToken(event.target.value)} minLength={10} required type="password" placeholder="Token da UAZAPI"/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Conectando...' : 'Conectar número UAZAPI'} <Link2 size={16}/></button></form> : <><div className="chatbot-channels">{data.channels.map((channel) => <div key={channel.id}><span className="connection-dot"/><span><b>{channel.name}</b><small>{channel.phone_number ?? 'Número em conexão'} · {channel.status}</small></span></div>)}</div><form className="form-stack chatbot-form" onSubmit={saveSettings}><label className="checkbox-field"><input type="checkbox" checked={settings.is_active} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, is_active: event.target.checked } } : current)}/><span>Ativar respostas automáticas</span></label><label>Mensagem de boas-vindas<textarea value={settings.welcome_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, welcome_message: event.target.value } } : current)} placeholder="Olá! Escolha uma opção para continuar."/></label><label>Resposta padrão <small>quando nenhuma regra for encontrada</small><textarea value={settings.fallback_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, fallback_message: event.target.value } } : current)} placeholder="Não entendi. Digite MENU para ver as opções."/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Salvando...' : 'Salvar configuração'} <CheckCircle2 size={16}/></button></form></>}
       </article>
-      <article className="panel chatbot-panel"><div className="panel__header"><div><span className="eyebrow">REGRAS DE RESPOSTA</span><h2>Mensagens automáticas</h2></div><span className="count-pill">{data.rules.length}</span></div>{data.channels.length ? <><form className="chatbot-rule-form" onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { await api.createChatbotRule(session, { channelId: data.channels[0].id, name: ruleName, triggerType: ruleType, triggerValue: ruleType === 'keyword' ? keyword : undefined, responseText: response }); setKeyword(''); setResponse(''); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar a regra.') } finally { setLoading(false) } }}><label>Nome da regra<input value={ruleName} onChange={(event) => setRuleName(event.target.value)} required/></label><label>Quando<select value={ruleType} onChange={(event) => setRuleType(event.target.value as 'keyword' | 'first_message')}><option value="first_message">Receber a primeira mensagem</option><option value="keyword">Encontrar uma palavra-chave</option></select></label>{ruleType === 'keyword' && <label>Palavra-chave<input value={keyword} onChange={(event) => setKeyword(event.target.value)} required placeholder="Ex.: preços"/></label>}<label>Resposta<textarea value={response} onChange={(event) => setResponse(event.target.value)} required placeholder="Mensagem que será enviada"/></label><button className="primary-button" type="submit" disabled={loading}>Adicionar regra <Plus size={16}/></button></form><div className="chatbot-rules">{data.rules.map((rule) => <article key={rule.id}><div><span className="rule-trigger">{rule.trigger_type === 'keyword' ? `Palavra: ${rule.trigger_value}` : 'Primeira mensagem'}</span><b>{rule.name}</b><p>{rule.response_text}</p></div><button type="button" onClick={() => { void api.deleteChatbotRule(session, rule.id).then(load).catch((reason) => setError(reason instanceof Error ? reason.message : 'Não foi possível remover a regra.')) }} aria-label={`Remover ${rule.name}`}><X size={16}/></button></article>)}{!data.rules.length && <p className="chatbot-empty">Crie a primeira regra para começar.</p>}</div></> : <p className="chatbot-empty">Conecte um número UAZAPI para criar regras.</p>}</article>
+      <article className="panel chatbot-panel">
+        <div className="panel__header"><div><span className="eyebrow">REGRAS DE RESPOSTA</span><h2>Mensagens automáticas</h2></div><span className="count-pill">{data.rules.length}</span></div>
+        {data.channels.length ? <>
+          <form className="chatbot-rule-form" onSubmit={async (event) => {
+            event.preventDefault(); setLoading(true); setError('')
+            try {
+              await api.createChatbotRule(session, { channelId: selectedChannelId || data.channels[0].id, name: ruleName, triggerType: ruleType, triggerValue: ruleType === 'keyword' ? keyword : undefined, responseText: response })
+              setKeyword(''); setResponse(''); await load()
+            } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar a regra.') } finally { setLoading(false) }
+          }}>
+            <label>Número do WhatsApp<select value={selectedChannelId || data.channels[0].id} onChange={(event) => setSelectedChannelId(event.target.value)}>{data.channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name} · {channel.provider === 'evolution' ? 'Evolution' : 'UAZAPI'}</option>)}</select></label>
+            <label>Nome da regra<input value={ruleName} onChange={(event) => setRuleName(event.target.value)} required/></label>
+            <label>Quando<select value={ruleType} onChange={(event) => setRuleType(event.target.value as 'keyword' | 'first_message')}><option value="first_message">Receber a primeira mensagem</option><option value="keyword">Encontrar uma palavra-chave</option></select></label>
+            {ruleType === 'keyword' && <label>Palavra-chave<input value={keyword} onChange={(event) => setKeyword(event.target.value)} required placeholder="Ex.: preços"/></label>}
+            <label>Resposta<textarea value={response} onChange={(event) => setResponse(event.target.value)} required placeholder="Mensagem que será enviada"/></label>
+            <button className="primary-button" type="submit" disabled={loading}>Adicionar regra <Plus size={16}/></button>
+          </form>
+          <div className="chatbot-rules">{data.rules.map((rule) => <article key={rule.id}><div><span className="rule-trigger">{data.channels.find((channel) => channel.id === rule.channel_id)?.name ?? 'Número'} · {rule.trigger_type === 'keyword' ? `Palavra: ${rule.trigger_value}` : 'Primeira mensagem'}</span><b>{rule.name}</b><p>{rule.response_text}</p></div><button type="button" onClick={() => { void api.deleteChatbotRule(session, rule.id).then(load).catch((reason) => setError(reason instanceof Error ? reason.message : 'Não foi possível remover a regra.')) }} aria-label={`Remover ${rule.name}`}><X size={16}/></button></article>)}{!data.rules.length && <p className="chatbot-empty">Crie a primeira regra para começar.</p>}</div>
+        </> : <p className="chatbot-empty">Conecte um número Evolution ou UAZAPI para criar regras.</p>}
+      </article>
     </section>}{error && data && <p className="form-error chatbot-error">{error}</p>}</>
 }
 
@@ -462,7 +557,7 @@ export default function App() {
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales}/>
-    if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
+    if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
     const copy: Record<'trafego' | 'relatorios', [typeof Bot, string, string, string]> = {
       trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],

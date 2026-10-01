@@ -13,5 +13,6 @@ export const config = {
   jwtSecret: () => required('JWT_SECRET'),
   encryptionKey: () => required('APP_ENCRYPTION_KEY'),
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
+  crmPublicUrl: process.env.CRM_PUBLIC_URL?.replace(/\/$/, '') ?? '',
   allowedOrigins: (process.env.ALLOW_ORIGINS ?? 'http://localhost:5173').split(',').map((item) => item.trim()),
 }
