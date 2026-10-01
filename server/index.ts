@@ -14,6 +14,7 @@ import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionQr, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
+import { pickText } from './message-text.js'
 
 type Token = { userId: string; companyId: string; role: string }
 type CompanyRow = { company_id: string; role: string }
@@ -659,16 +660,6 @@ const safeEqual = (a: string, b: string) => {
 }
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-
-const pickText = (value: unknown): string | null => {
-  if (typeof value === 'string' && value.trim()) return value.trim()
-  const input = record(value)
-  for (const key of ['body', 'text', 'conversation', 'caption', 'extendedTextMessage', 'ephemeralMessage', 'viewOnceMessage', 'imageMessage', 'videoMessage', 'message']) {
-    const result = pickText(input[key])
-    if (result) return result
-  }
-  return null
-}
 
 const uazapiTimestamp = (value: unknown) => {
   const numeric = Number(value)
