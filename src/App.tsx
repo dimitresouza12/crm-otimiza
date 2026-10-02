@@ -115,12 +115,22 @@ function LeadCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
   )
 }
 
-function Dashboard({ onNavigate, metrics }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } }) {
-  const revenue = metrics?.confirmedRevenue ?? 38640
-  const sales = metrics?.confirmedSales ?? 12
-  const openLeads = metrics?.openLeads ?? 8
-  const averageTicket = metrics?.averageTicket ?? 3220
-  const leadsThisMonth = metrics?.leadsThisMonth ?? 146
+function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
+  const revenue = metrics?.confirmedRevenue ?? 0
+  const confirmedSales = metrics?.confirmedSales ?? 0
+  const openLeads = metrics?.openLeads ?? 0
+  const averageTicket = metrics?.averageTicket ?? 0
+  const leadsThisMonth = metrics?.leadsThisMonth ?? 0
+  const attention = leads.filter((lead) => lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos').slice(0, 3)
+  const sourceResults = Array.from(leads.reduce((accumulator, lead) => {
+    const current = accumulator.get(lead.source) ?? { name: lead.source, revenue: 0, leads: 0 }
+    current.leads += 1
+    accumulator.set(lead.source, current)
+    return accumulator
+  }, new Map<string, { name: string; revenue: number; leads: number }>()).values()).map((source) => ({
+    ...source,
+    revenue: sales.filter((sale) => sale.status === 'confirmed' && sale.opportunity_id && leads.some((lead) => lead.opportunityId === sale.opportunity_id && lead.source === source.name)).reduce((total, sale) => total + Number(sale.amount), 0),
+  })).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads)
   return (
     <>
       <section className="page-head">
@@ -128,7 +138,7 @@ function Dashboard({ onNavigate, metrics }: { onNavigate: (page: Page) => void; 
         <button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button>
       </section>
       <section className="metric-grid">
-        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${sales} venda${sales === 1 ? '' : 's'} confirmada${sales === 1 ? '' : 's'}`} emphasis />
+        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}`} emphasis />
         <MetricCard title="Em negociação" value={`${openLeads} leads`} trend="Acompanhe no funil" />
         <MetricCard title="Novos leads" value={String(leadsThisMonth)} trend="Entraram neste mês" />
         <MetricCard title="Ticket médio" value={money(averageTicket)} trend="Receita confirmada" />
@@ -149,17 +159,16 @@ function Dashboard({ onNavigate, metrics }: { onNavigate: (page: Page) => void; 
           <div className="chart-axis"><span>01 set.</span><span>08 set.</span><span>15 set.</span><span>22 set.</span><span>30 set.</span></div>
         </article>
         <article className="attention-panel panel">
-          <div className="panel__header"><div><span className="eyebrow">PRÓXIMA AÇÃO</span><h2>Não deixe esfriar</h2></div><span className="count-pill">12</span></div>
-          <div className="attention-lead"><Avatar initials="MC" /><div><strong>Mariana Costa</strong><p>Esperando resposta há 26 min</p></div><button type="button" aria-label="Abrir conversa"><ChevronRight size={19} /></button></div>
-          <div className="attention-lead"><Avatar initials="PV" /><div><strong>Paulo Viana</strong><p>Disse que fecha hoje · R$ 1.500</p></div><button type="button" aria-label="Abrir conversa"><ChevronRight size={19} /></button></div>
-          <div className="attention-lead"><Avatar initials="AL" /><div><strong>André Lima</strong><p>Proposta enviada ontem</p></div><button type="button" aria-label="Abrir conversa"><ChevronRight size={19} /></button></div>
+          <div className="panel__header"><div><span className="eyebrow">PRÓXIMA AÇÃO</span><h2>Não deixe esfriar</h2></div><span className="count-pill">{attention.length}</span></div>
+          {attention.map((lead) => <div className="attention-lead" key={lead.id}><Avatar initials={lead.initials} /><div><strong>{lead.name}</strong><p>{lead.lastMessage}</p></div><button type="button" aria-label={`Abrir ${lead.name}`} onClick={() => onNavigate('crm')}><ChevronRight size={19} /></button></div>)}
+          {!attention.length && <div className="dashboard-empty">Conecte seu WhatsApp ou crie um lead para acompanhar as próximas ações.</div>}
           <button className="wide-secondary" type="button" onClick={() => onNavigate('conversas')}>Abrir conversas pendentes <ArrowRight size={16} /></button>
         </article>
       </section>
       <section className="source-section panel">
         <div className="panel__header"><div><span className="eyebrow">ORIGEM DOS RESULTADOS</span><h2>O que trouxe as vendas deste mês</h2></div><button className="text-button" type="button" onClick={() => onNavigate('trafego')}>Analisar tráfego <ArrowRight size={16} /></button></div>
         <div className="source-rows">
-          {[['Meta Ads', 'R$ 20.460', 53, 'meta'], ['Google Ads', 'R$ 9.480', 25, 'google'], ['Indicação', 'R$ 5.820', 15, 'referral'], ['Orgânico', 'R$ 2.880', 7, 'organic']].map(([name, value, percent, type]) => <div className="source-row" key={name as string}><span className={`source-dot source-dot--${type}`} /><strong>{name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{value}</b><small>{percent}%</small></div>)}
+          {sourceResults.length ? sourceResults.map((source, index) => { const percent = revenue ? Math.round((source.revenue / revenue) * 100) : Math.round((source.leads / Math.max(leads.length, 1)) * 100); const types = ['meta', 'google', 'referral', 'organic']; return <div className="source-row" key={source.name}><span className={`source-dot source-dot--${types[index % types.length]}`} /><strong>{source.name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{money(source.revenue)}</b><small>{percent}%</small></div> }) : <div className="dashboard-empty">As origens aparecerão quando entrarem os primeiros leads.</div>}
         </div>
       </section>
     </>
@@ -197,7 +206,7 @@ function LeadsPage({ leads, onSelectLead, onAddLead }: { leads: Lead[]; onSelect
   return <><section className="page-head crm-head"><div><span className="eyebrow">BASE DE CONTATOS</span><h1>Leads</h1><p>Todos os contatos que entraram no seu processo comercial.</p></div><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18}/> Novo lead</button></section><section className="list-panel panel"><div className="list-toolbar"><div className="search-box"><Search size={17}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar nome ou origem"/></div><span>{visible.length} contato{visible.length === 1 ? '' : 's'}</span></div><div className="data-list">{visible.map((lead) => <button type="button" className="data-row" onClick={() => onSelectLead(lead)} key={lead.id}><Avatar initials={lead.initials}/><span className="data-row__main"><b>{lead.name}</b><small>{lead.lastMessage}</small></span><span className="data-row__source">{lead.source}</span><span className={`temperature temperature--${lead.temperature.toLowerCase()}`}>{lead.temperature}</span><span className="data-row__value">{lead.value ? money(lead.value) : 'Sem valor'}</span><ChevronRight size={17}/></button>)}{!visible.length && <div className="empty-list"><UsersRound size={19}/><p>Nenhum lead encontrado.</p></div>}</div></section></>
 }
 
-type SaleRow = { id: string; status: 'negotiation' | 'detected' | 'confirmed' | 'lost'; amount: string; confirmed_at: string | null; created_at: string; contact_name: string | null; opportunity_title: string | null }
+type SaleRow = { id: string; status: 'negotiation' | 'detected' | 'confirmed' | 'lost'; amount: string; confirmed_at: string | null; created_at: string; opportunity_id: string | null; contact_name: string | null; opportunity_title: string | null }
 
 function SalesPage({ sales, session, onRefresh }: { sales: SaleRow[]; session: Session; onRefresh: () => Promise<void> }) {
   const totals = sales.reduce((accumulator, sale) => { if (sale.status === 'confirmed') accumulator.confirmed += Number(sale.amount); else if (sale.status === 'detected') accumulator.detected += Number(sale.amount); return accumulator }, { confirmed: 0, detected: 0 })
@@ -264,39 +273,20 @@ function NotificationsPanel({ notifications, onClose, onNavigate }: { notificati
   return <section className="notifications-panel" aria-label="Notificações"><header><span><Bell size={16}/> Notificações</span><button type="button" onClick={onClose}><X size={16}/></button></header>{notifications.length ? notifications.map((item) => <article key={item.id}><b>{item.title}</b><p>{item.body}</p><button type="button" onClick={() => { onNavigate(target[item.type]); onClose() }}>{item.action}</button></article>) : <div className="empty-list"><CheckCircle2 size={19}/><p>Você está em dia.</p></div>}</section>
 }
 
-function Integrations({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void }) {
-  const [provider, setProvider] = useState<'evolution' | 'meta' | 'uazapi' | 'ads'>('evolution')
-  const [started, setStarted] = useState(false)
-  const [channelName, setChannelName] = useState('Comercial')
-  const [phoneNumber, setPhoneNumber] = useState('')
-  const [phoneNumberId, setPhoneNumberId] = useState('')
-  const [accessToken, setAccessToken] = useState('')
-  const [connectionError, setConnectionError] = useState('')
-  const [connecting, setConnecting] = useState(false)
-  const uazapiEnabled = Boolean(account?.uses_automation || account?.plan === 'chatbot' || account?.plan === 'automation')
+function Integrations({ session, account, onRequestAccess, onOpenChatbot }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void; onOpenChatbot: () => void }) {
+  const [provider, setProvider] = useState<'evolution' | 'uazapi'>('evolution')
+  const chatbotEnabled = account?.plan === 'chatbot'
   const detail = provider === 'evolution'
-    ? { eyebrow: 'CONEXÃO POR QR CODE', title: 'Conecte seu WhatsApp', text: 'Use a Evolution hospedada pela Otimiza AI para acompanhar conversas e leads no CRM. As respostas automáticas só são ativadas por você no plano Chatbot.', action: 'Conectar pela Evolution', steps: ['Dê um nome ao seu canal', 'Escaneie o QR Code com o WhatsApp', 'Acompanhe conversas e leads no CRM'] }
-    : provider === 'meta'
-    ? { eyebrow: 'WHATSAPP BUSINESS PLATFORM', title: 'Conecte seu WhatsApp Oficial', text: 'Para acompanhar atendimento sem chatbot ou automação, conecte o número pela API Oficial da Meta.', action: 'Conectar com a Meta', steps: ['Entre na conta Meta da sua empresa', 'Escolha a conta do WhatsApp Business', 'Selecione o número que deseja acompanhar'] }
-    : provider === 'uazapi'
-      ? { eyebrow: 'CHATBOT E AUTOMAÇÃO OTIMIZA AI', title: uazapiEnabled ? 'Conecte seu número com a equipe' : 'Adicione chatbot ou automação', text: uazapiEnabled ? 'A equipe Otimiza AI conecta a instância UAZAPI e mantém o chatbot ou as automações sincronizados com o CRM.' : 'A UAZAPI é usada apenas quando sua empresa possui Chatbot ou Automação Otimiza AI.', action: uazapiEnabled ? 'Solicitar conexão da equipe' : 'Ver solução Chatbot e Automação', steps: uazapiEnabled ? ['Solicite a conexão do número', 'A equipe valida a instância UAZAPI', 'CRM, chatbot e automações usam o mesmo canal'] : ['Use o WhatsApp Oficial para acompanhamento', 'Ative Chatbot ou Automação quando quiser responder por regras ou fluxos', 'A equipe conecta a UAZAPI na ativação'] }
-      : { eyebrow: 'ATRIBUIÇÃO DE CAMPANHAS', title: 'Conecte sua conta Meta Ads', text: 'Veja investimento, leads e vendas no mesmo relatório. A conexão é feita pela conta de anúncios da sua empresa.', action: 'Conectar conta de anúncios', steps: ['Autorize a conta de anúncios', 'Escolha as campanhas que deseja acompanhar', 'Use links rastreáveis nos seus anúncios'] }
-  const requestConnection = async () => {
-    if (!session) return onRequestAccess()
-    if (provider !== 'uazapi' || !uazapiEnabled) return setStarted(true)
-    setConnecting(true); setConnectionError('')
-    try { await api.requestUazapiConnection(session); setStarted(true) } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível registrar sua solicitação.') } finally { setConnecting(false) }
-  }
+    ? { eyebrow: 'CONEXÃO POR QR CODE', title: 'Conecte seu WhatsApp', text: 'Use a Evolution hospedada pela Otimiza AI para registrar conversas, leads, etapas e vendas no CRM.', steps: ['Dê um nome ao número', 'Escaneie o QR Code com o WhatsApp', 'Acompanhe os dados no CRM'] }
+    : { eyebrow: 'CHATBOT E AUTOMAÇÃO', title: chatbotEnabled ? 'Configure seu chatbot' : 'Chatbot e automação sob demanda', text: chatbotEnabled ? 'Seu número pode usar respostas por regras configuradas na aba Chatbot.' : 'Chatbot e automação são serviços opcionais da Otimiza AI, definidos conforme o diagnóstico da empresa.', steps: chatbotEnabled ? ['Conecte o número pela Evolution', 'Configure regras e mensagens no Chatbot', 'Acompanhe os resultados no CRM'] : ['Comece pelo CRM e pelo WhatsApp', 'Solicite o diagnóstico quando precisar automatizar', 'A equipe Otimiza AI cuida da implantação'] }
   return <>
-    <section className="page-head integration-head"><div><span className="eyebrow">CONEXÕES</span><h1>Integrações</h1><p>Conecte seus canais e acompanhe os resultados em um único lugar.</p></div><span className="security-status"><ShieldCheck size={16}/> Dados protegidos</span></section>
+    <section className="page-head integration-head"><div><span className="eyebrow">CONEXÕES</span><h1>Integrações</h1><p>Conecte seu WhatsApp e acompanhe cada atendimento no funil.</p></div><span className="security-status"><ShieldCheck size={16}/> Dados protegidos</span></section>
     <section className="integration-layout"><div className="integration-list">
-      <button className={`integration-item ${provider === 'evolution' ? 'is-current' : ''}`} onClick={() => { setProvider('evolution'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp por QR Code</b><small>Evolution · conexão em poucos passos</small></span><em>Comece aqui</em><ChevronRight size={17}/></button>
-      <button className={`integration-item ${provider === 'meta' ? 'is-current' : ''}`} onClick={() => { setProvider('meta'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp Oficial</b><small>Para atendimento sem automação</small></span><em>Recomendado</em><ChevronRight size={17}/></button>
-      <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => { setProvider('uazapi'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Chatbot e automação</b><small>UAZAPI conectada pela equipe</small></span><em className="integration-item__state">{uazapiEnabled ? 'Disponível' : 'Opcional'}</em><ChevronRight size={17}/></button>
-      <button className={`integration-item ${provider === 'ads' ? 'is-current' : ''}`} onClick={() => { setProvider('ads'); setStarted(false); setConnectionError('') }} type="button"><span className="integration-logo integration-logo--ads"><TrendingUp size={20}/></span><span><b>Meta Ads</b><small>Investimento e vendas atribuídas</small></span><ChevronRight size={17}/></button>
+      <button className={`integration-item ${provider === 'evolution' ? 'is-current' : ''}`} onClick={() => setProvider('evolution')} type="button"><span className="integration-logo integration-logo--whatsapp"><MessageCircleMore size={20}/></span><span><b>WhatsApp por QR Code</b><small>Evolution · conexão em poucos passos</small></span><em>Comece aqui</em><ChevronRight size={17}/></button>
+      <button className={`integration-item ${provider === 'uazapi' ? 'is-current' : ''}`} onClick={() => setProvider('uazapi')} type="button"><span className="integration-logo integration-logo--otimiza"><img src={otimizaSymbol} alt=""/></span><span><b>Chatbot e automação</b><small>Serviço adicional Otimiza AI</small></span><em className="integration-item__state">{chatbotEnabled ? 'Disponível' : 'Opcional'}</em><ChevronRight size={17}/></button>
     </div><article className="connection-detail panel"><span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2><p>{detail.text}</p><div className="connection-steps">{detail.steps.map((step, index) => <div key={step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-      {provider === 'evolution' ? <EvolutionConnectionPanel session={session} onRequestAccess={onRequestAccess} /> : !started ? <button className="primary-button" type="button" disabled={connecting} onClick={() => void requestConnection()}><Link2 size={17}/>{connecting ? 'Enviando...' : detail.action}</button> : provider === 'ads' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>Integração preparada</b><p>A autorização da Meta Ads será liberada assim que o aplicativo Meta da Otimiza AI estiver configurado com o domínio do CRM.</p></div></div> : provider === 'uazapi' ? <div className="connection-started"><CheckCircle2 size={19}/><div><b>{uazapiEnabled ? 'Solicitação registrada' : 'WhatsApp Oficial recomendado'}</b><p>{uazapiEnabled ? 'Nossa equipe fará a configuração técnica da instância UAZAPI.' : 'Para acompanhar atendimentos sem chatbot ou automação, conecte seu número usando a API Oficial da Meta.'}</p></div></div> : <form className="connection-form" onSubmit={async (event) => { event.preventDefault(); if (!session) return onRequestAccess(); setConnecting(true); setConnectionError(''); try { await api.connectWhatsapp(session, { provider: 'meta_cloud', channelName, phoneNumber: phoneNumber || undefined, phoneNumberId, accessToken }); setStarted(false); setAccessToken('') } catch (reason) { setConnectionError(reason instanceof Error ? reason.message : 'Não foi possível salvar a conexão.') } finally { setConnecting(false) } }}><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} placeholder="Ex.: 5585999999999"/></label><label>ID do número na Meta<input value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} required placeholder="Phone Number ID"/></label><label>Token de acesso da Meta<input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} required minLength={10} type="password" placeholder="Token permanente ou de teste"/></label>{connectionError && <p className="form-error">{connectionError}</p>}<div><button className="toolbar-button" type="button" onClick={() => setStarted(false)}>Cancelar</button><button className="primary-button" type="submit" disabled={connecting}>{connecting ? 'Salvando...' : 'Salvar conexão'}</button></div></form>}
-      {connectionError && !started && <p className="form-error">{connectionError}</p>}<small className="connection-note">{provider === 'evolution' ? 'O canal usa a Evolution da Otimiza AI. O QR Code aparece apenas na sua conta.' : provider === 'meta' ? 'A API Oficial organiza conversas e dados sem ativar respostas automáticas.' : provider === 'uazapi' ? 'As credenciais e os webhooks da UAZAPI são configurados pela equipe Otimiza AI.' : 'Receita só é atribuída quando houver um lead identificado pela campanha.'}</small>
+      {provider === 'evolution' ? <EvolutionConnectionPanel session={session} onRequestAccess={onRequestAccess} /> : <div className="connection-started"><CheckCircle2 size={19}/><div><b>{chatbotEnabled ? 'Seu Chatbot está disponível' : 'Disponível quando sua empresa precisar'}</b><p>{chatbotEnabled ? 'Abra a aba Chatbot para conectar a instância e configurar as regras do seu número.' : 'A equipe Otimiza AI orienta a configuração depois do diagnóstico comercial.'}</p></div></div>}
+      {provider === 'uazapi' && chatbotEnabled && <button className="primary-button" type="button" onClick={onOpenChatbot}>Abrir Chatbot <ArrowRight size={16}/></button>}<small className="connection-note">{provider === 'evolution' ? 'O QR Code conecta o número à sua empresa e as novas mensagens passam a alimentar o CRM.' : 'A UAZAPI só é usada para Chatbot ou Automação. Nenhuma integração com Meta é necessária nesta fase.'}</small>
     </article></section>
   </>
 }
@@ -642,13 +632,13 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} />
+    if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} leads={leads} sales={sales} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales} session={session!} onRefresh={() => loadWorkspace(session!)}/>
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
-    if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
+    if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} />
     if (page === 'trafego') return <TrafficPage session={session!}/>
     return <ReportsPage session={session!}/>
   }

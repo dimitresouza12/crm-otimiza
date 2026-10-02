@@ -307,7 +307,7 @@ app.get('/api/sales', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
   if (!scope) return
   const { rows } = await query(
-    `SELECT s.id, s.status, s.amount, s.confirmed_at, s.created_at, c.name AS contact_name, o.title AS opportunity_title
+    `SELECT s.id, s.status, s.amount, s.confirmed_at, s.created_at, s.opportunity_id, c.name AS contact_name, o.title AS opportunity_title
      FROM sales s LEFT JOIN contacts c ON c.id = s.contact_id LEFT JOIN opportunities o ON o.id = s.opportunity_id
      WHERE s.company_id = $1 ORDER BY COALESCE(s.confirmed_at, s.created_at) DESC`, [scope.companyId],
   )

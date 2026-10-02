@@ -4,7 +4,7 @@
 
 Preparar o CRM para uso por clientes reais sem expor a demonstração como se fosse uma conta ativa. A entrega adiciona uma entrada pública própria, protege os dados operacionais por sessão e conclui as telas de Tráfego pago, Relatórios, Central de ajuda e Notificações.
 
-A aba Conteúdo e a publicação no Instagram não fazem parte desta entrega.
+A aba Conteúdo, a publicação no Instagram e integrações com a Meta não fazem parte do lançamento inicial.
 
 ## Decisão de produto
 
@@ -32,7 +32,7 @@ Esta entrega inclui a interface e a regra de expiração. Cobrança, recuperaç�
 | Leads | Lista de leads | Dados existentes de contatos e oportunidades |
 | Conversas | Histórico e última mensagem | Dados existentes de conversas e mensagens |
 | Vendas | Vendas confirmadas e pendentes | Dados existentes de vendas |
-| Tráfego pago | Origem, investimento, leads, vendas, receita, CPL, CAC e ROAS | Métricas preenchidas pelo cliente, com estado preparado para futura sincronização Meta Ads |
+| Tráfego pago | Origem, investimento, leads, vendas, receita, CPL, CAC e ROAS | Métricas preenchidas pelo cliente, sem conexão com contas de anúncios nesta fase |
 | Relatórios | Comparativos por período, origem e funil | Cálculos a partir de leads, vendas e métricas de tráfego |
 | Central de ajuda | Guias de início, WhatsApp, funil e atendimento | Conteúdo local do produto e atalhos internos |
 | Notificações | Alertas operacionais | Alertas calculados de canal desconectado, leads sem retorno e teste perto do fim |
@@ -51,7 +51,7 @@ Indicadores:
 - CAC: investimento dividido por vendas confirmadas.
 - ROAS: receita dividida por investimento.
 
-Caso a origem ainda não possua vendas, CAC e ROAS aparecem como indisponíveis, sem inventar valor. Uma integração Meta Ads futura grava métricas na mesma estrutura, substituindo o preenchimento manual por sincronização.
+Caso a origem ainda não possua vendas, CAC e ROAS aparecem como indisponíveis, sem inventar valor. Uma integração de anúncios futura pode gravar métricas na mesma estrutura, substituindo o preenchimento manual por sincronização.
 
 ## Relatórios
 
