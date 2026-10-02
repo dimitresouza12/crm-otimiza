@@ -17,7 +17,7 @@ import { createEvolutionInstance, evolutionConfigured, evolutionQr, evolutionSen
 import { pickText } from './message-text.js'
 
 type Token = { userId: string; companyId: string; role: string }
-type CompanyRow = { company_id: string; role: string }
+type CompanyRow = { company_id: string; role: string; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null }
 
 const app = Fastify({
   logger: {
@@ -52,15 +52,27 @@ const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
 
 const currentToken = (request: FastifyRequest) => request.user as Token
 
-const companyScope = async (request: FastifyRequest, reply: FastifyReply) => {
+const companyScope = async (request: FastifyRequest, reply: FastifyReply, allowExpired = false) => {
   const token = currentToken(request)
   const requestedCompanyId = (request.headers['x-company-id'] as string | undefined) ?? token.companyId
-  const { rows } = await query<CompanyRow>('SELECT company_id, role FROM memberships WHERE company_id = $1 AND user_id = $2', [requestedCompanyId, token.userId])
+  const { rows } = await query<CompanyRow>(
+    `SELECT m.company_id, m.role, c.billing_status, c.trial_ends_at
+     FROM memberships m JOIN companies c ON c.id = m.company_id
+     WHERE m.company_id = $1 AND m.user_id = $2`,
+    [requestedCompanyId, token.userId],
+  )
   if (!rows[0]) {
     reply.code(403).send({ error: 'Você não tem acesso a esta empresa.' })
     return null
   }
-  return { companyId: rows[0].company_id, role: rows[0].role, userId: token.userId }
+  const membership = rows[0]
+  const trialExpired = membership.billing_status === 'trial' && membership.trial_ends_at !== null && new Date(membership.trial_ends_at).getTime() <= Date.now()
+  const accessState = membership.billing_status === 'active' || membership.role === 'otimiza_admin' ? 'active' : trialExpired || membership.billing_status === 'expired' ? 'expired' : 'trial'
+  if (!allowExpired && accessState === 'expired') {
+    reply.code(402).send({ error: 'Seu período de teste terminou. Escolha um plano para continuar usando o CRM.', code: 'TRIAL_EXPIRED' })
+    return null
+  }
+  return { companyId: membership.company_id, role: membership.role, userId: token.userId, accessState, trialEndsAt: membership.trial_ends_at }
 }
 
 const defaultPipeline = async (companyId: string) => {
@@ -103,8 +115,8 @@ app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 h
       const existing = await client.query('SELECT id FROM users WHERE email = $1', [input.email])
       if (existing.rowCount) throw new Error('EMAIL_EXISTS')
       const company = await client.query<{ id: string }>(
-        `INSERT INTO companies (name, slug, trial_ends_at, onboarding)
-         VALUES ($1, $2 || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6), now() + interval '7 days', $3::jsonb)
+        `INSERT INTO companies (name, slug, trial_ends_at, billing_status, onboarding)
+         VALUES ($1, $2 || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6), now() + interval '7 days', 'trial', $3::jsonb)
          RETURNING id`,
         [input.companyName, companyBaseSlug, JSON.stringify({ segment: input.segment, objective: input.objective, usesOtimizaAutomation: input.usesOtimizaAutomation ?? false })],
       )
@@ -133,14 +145,14 @@ app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 mi
 })
 
 app.get('/api/me', { preHandler: authenticate }, async (request, reply) => {
-  const scope = await companyScope(request, reply)
+  const scope = await companyScope(request, reply, true)
   if (!scope) return
-  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null; uses_automation: boolean }>(
-    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.trial_ends_at,
+  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null; billing_status: string; uses_automation: boolean }>(
+    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.trial_ends_at, c.billing_status,
        COALESCE((c.onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
      FROM users u JOIN companies c ON c.id = $1 WHERE u.id = $2`, [scope.companyId, scope.userId],
   )
-  return { ...rows[0], role: scope.role, companyId: scope.companyId }
+  return { ...rows[0], role: scope.role, companyId: scope.companyId, access_state: scope.accessState }
 })
 
 app.get('/api/dashboard', { preHandler: authenticate }, async (request, reply) => {
@@ -352,6 +364,146 @@ app.post('/api/sales', { preHandler: authenticate }, async (request, reply) => {
      RETURNING id, status, amount, confirmed_at`, [scope.companyId, input.opportunityId ?? null, contactId, input.status, input.amount],
   )
   return reply.code(201).send(rows[0])
+})
+
+app.post('/api/sales/:saleId/confirm', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode confirmar vendas.' })
+  const params = z.object({ saleId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Venda inválida.' })
+  const sale = await query<{ id: string; opportunity_id: string | null; amount: string }>(
+    `UPDATE sales SET status = 'confirmed', confirmed_at = COALESCE(confirmed_at, now()), updated_at = now()
+     WHERE id = $1 AND company_id = $2 AND status IN ('detected', 'negotiation')
+     RETURNING id, opportunity_id, amount`,
+    [params.data.saleId, scope.companyId],
+  )
+  if (!sale.rows[0]) return reply.code(404).send({ error: 'Venda em revisão não encontrada.' })
+  if (sale.rows[0].opportunity_id) {
+    await query(
+      `UPDATE opportunities SET stage_id = (
+         SELECT ps.id FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id
+         WHERE p.company_id = $2 AND p.is_default = true AND ps.kind = 'won' ORDER BY ps.position LIMIT 1
+       ), estimated_value = $3, last_activity_at = now(), updated_at = now()
+       WHERE id = $1 AND company_id = $2`,
+      [sale.rows[0].opportunity_id, scope.companyId, sale.rows[0].amount],
+    )
+  }
+  return sale.rows[0]
+})
+
+const trafficMetricSchema = z.object({
+  source: z.string().trim().min(2).max(80),
+  platform: z.string().trim().min(2).max(60).default('Meta Ads'),
+  periodStart: z.string().date(),
+  periodEnd: z.string().date(),
+  spend: z.coerce.number().min(0).max(99_999_999),
+  reportedLeads: z.coerce.number().int().min(0).max(99_999_999).default(0),
+  impressions: z.coerce.number().int().min(0).max(9_999_999_999).default(0),
+  clicks: z.coerce.number().int().min(0).max(9_999_999_999).default(0),
+}).refine((input) => input.periodEnd >= input.periodStart, { message: 'O fim do período deve ser posterior ao início.', path: ['periodEnd'] })
+
+app.get('/api/traffic', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const { rows } = await query(
+    `SELECT tm.id, tm.source, tm.platform, tm.period_start, tm.period_end, tm.spend, tm.reported_leads, tm.impressions, tm.clicks,
+       COALESCE((SELECT count(*) FROM opportunities o WHERE o.company_id = tm.company_id AND lower(COALESCE(o.source, '')) = lower(tm.source)
+          AND o.created_at >= tm.period_start AND o.created_at < tm.period_end + 1), 0)::text AS crm_leads,
+       COALESCE((SELECT count(*) FROM sales s JOIN opportunities o ON o.id = s.opportunity_id WHERE s.company_id = tm.company_id
+          AND s.status = 'confirmed' AND lower(COALESCE(o.source, '')) = lower(tm.source)
+          AND s.confirmed_at >= tm.period_start AND s.confirmed_at < tm.period_end + 1), 0)::text AS confirmed_sales,
+       COALESCE((SELECT sum(s.amount) FROM sales s JOIN opportunities o ON o.id = s.opportunity_id WHERE s.company_id = tm.company_id
+          AND s.status = 'confirmed' AND lower(COALESCE(o.source, '')) = lower(tm.source)
+          AND s.confirmed_at >= tm.period_start AND s.confirmed_at < tm.period_end + 1), 0)::text AS confirmed_revenue
+     FROM traffic_metrics tm WHERE tm.company_id = $1 ORDER BY tm.period_end DESC, tm.created_at DESC`,
+    [scope.companyId],
+  )
+  return rows
+})
+
+app.post('/api/traffic', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode registrar métricas de tráfego.' })
+  const parsed = trafficMetricSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados da campanha.', details: parsed.error.flatten().fieldErrors })
+  try {
+    const { rows } = await query(
+      `INSERT INTO traffic_metrics (company_id, source, platform, period_start, period_end, spend, reported_leads, impressions, clicks, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, source, platform, period_start, period_end, spend, reported_leads, impressions, clicks`,
+      [scope.companyId, parsed.data.source, parsed.data.platform, parsed.data.periodStart, parsed.data.periodEnd, parsed.data.spend, parsed.data.reportedLeads, parsed.data.impressions, parsed.data.clicks, scope.userId],
+    )
+    return reply.code(201).send(rows[0])
+  } catch (error) {
+    if (typeof error === 'object' && error && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'Já existe uma métrica para esta origem, plataforma e período.' })
+    throw error
+  }
+})
+
+const reportPeriodSchema = z.object({ start: z.string().date().optional(), end: z.string().date().optional() })
+
+app.get('/api/reports', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const parsed = reportPeriodSchema.safeParse(request.query)
+  if (!parsed.success) return reply.code(400).send({ error: 'Período inválido.' })
+  const end = parsed.data.end ?? new Date().toISOString().slice(0, 10)
+  const start = parsed.data.start ?? `${end.slice(0, 8)}01`
+  if (end < start) return reply.code(400).send({ error: 'O fim do período deve ser posterior ao início.' })
+  const [totals, sources, pipeline] = await Promise.all([
+    query<{ revenue: string; sales: string; leads: string; ticket: string }>(
+      `SELECT COALESCE((SELECT sum(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= $2::date AND confirmed_at < $3::date + 1), 0)::text AS revenue,
+       (SELECT count(*) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= $2::date AND confirmed_at < $3::date + 1)::text AS sales,
+       (SELECT count(*) FROM opportunities WHERE company_id = $1 AND created_at >= $2::date AND created_at < $3::date + 1)::text AS leads,
+       COALESCE((SELECT avg(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= $2::date AND confirmed_at < $3::date + 1), 0)::text AS ticket`,
+      [scope.companyId, start, end],
+    ),
+    query(
+      `WITH sources AS (
+         SELECT DISTINCT source FROM traffic_metrics WHERE company_id = $1 AND period_start <= $3::date AND period_end >= $2::date
+         UNION
+         SELECT DISTINCT COALESCE(source, 'Sem origem') FROM opportunities WHERE company_id = $1 AND created_at >= $2::date AND created_at < $3::date + 1
+       )
+       SELECT source,
+         COALESCE((SELECT sum(spend) FROM traffic_metrics tm WHERE tm.company_id = $1 AND lower(tm.source) = lower(sources.source) AND tm.period_start <= $3::date AND tm.period_end >= $2::date), 0)::text AS spend,
+         (SELECT count(*) FROM opportunities o WHERE o.company_id = $1 AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND o.created_at >= $2::date AND o.created_at < $3::date + 1)::text AS leads,
+         (SELECT count(*) FROM sales sl JOIN opportunities o ON o.id = sl.opportunity_id WHERE sl.company_id = $1 AND sl.status = 'confirmed' AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND sl.confirmed_at >= $2::date AND sl.confirmed_at < $3::date + 1)::text AS sales,
+         COALESCE((SELECT sum(sl.amount) FROM sales sl JOIN opportunities o ON o.id = sl.opportunity_id WHERE sl.company_id = $1 AND sl.status = 'confirmed' AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND sl.confirmed_at >= $2::date AND sl.confirmed_at < $3::date + 1), 0)::text AS revenue
+       FROM sources ORDER BY revenue::numeric DESC, leads::integer DESC`,
+      [scope.companyId, start, end],
+    ),
+    query(
+      `SELECT ps.name, ps.kind, count(o.id)::text AS total FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id
+       LEFT JOIN opportunities o ON o.stage_id = ps.id AND o.company_id = $1
+       WHERE p.company_id = $1 AND p.is_default = true GROUP BY ps.id ORDER BY ps.position`,
+      [scope.companyId],
+    ),
+  ])
+  return { period: { start, end }, totals: totals.rows[0], sources: sources.rows, pipeline: pipeline.rows }
+})
+
+app.get('/api/notifications', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const [channels, leads] = await Promise.all([
+    query<{ id: string; name: string; status: string; last_event_at: string | null }>(
+      `SELECT c.id, c.name, c.status, wc.last_event_at FROM whatsapp_channels c LEFT JOIN whatsapp_connections wc ON wc.channel_id = c.id
+       WHERE c.company_id = $1 AND (c.status IN ('disconnected', 'error') OR (c.status = 'connected' AND (wc.last_event_at IS NULL OR wc.last_event_at < now() - interval '24 hours')))` , [scope.companyId]),
+    query<{ id: string; title: string; name: string | null; last_activity_at: string | null }>(
+      `SELECT o.id, o.title, c.name, o.last_activity_at FROM opportunities o JOIN pipeline_stages ps ON ps.id = o.stage_id LEFT JOIN contacts c ON c.id = o.contact_id
+       WHERE o.company_id = $1 AND ps.kind = 'open' AND o.last_activity_at < now() - interval '24 hours' ORDER BY o.last_activity_at ASC LIMIT 8`, [scope.companyId]),
+  ])
+  const notifications = [
+    ...channels.rows.map((channel) => ({ id: `channel-${channel.id}`, type: 'channel', title: `${channel.name} precisa de atenção`, body: channel.status === 'connected' ? 'O número está há mais de 24 horas sem novos eventos.' : 'O canal está desconectado ou apresentou erro.', action: 'Abrir configurações' })),
+    ...leads.rows.map((lead) => ({ id: `lead-${lead.id}`, type: 'lead', title: `${lead.name ?? lead.title} está sem retorno`, body: 'Este lead permanece em uma etapa aberta há mais de 24 horas.', action: 'Abrir CRM' })),
+  ]
+  if (scope.accessState === 'trial' && scope.trialEndsAt) {
+    const days = Math.ceil((new Date(scope.trialEndsAt).getTime() - Date.now()) / 86_400_000)
+    if (days <= 2) notifications.unshift({ id: 'trial-ending', type: 'trial', title: days <= 0 ? 'Seu teste terminou' : `Seu teste termina em ${days} dia${days === 1 ? '' : 's'}`, body: 'Escolha um plano para manter seus dados e integrações ativos.', action: 'Ver planos' })
+  }
+  return notifications
 })
 
 const connectionSchema = z.object({

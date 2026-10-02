@@ -8,12 +8,15 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
+  CircleHelp,
   CheckCircle2,
+  ClipboardCheck,
   Clock3,
   Filter,
   Goal,
   Link2,
   LayoutDashboard,
+  LockKeyhole,
   MessageCircleMore,
   MoreHorizontal,
   Plus,
@@ -196,10 +199,10 @@ function LeadsPage({ leads, onSelectLead, onAddLead }: { leads: Lead[]; onSelect
 
 type SaleRow = { id: string; status: 'negotiation' | 'detected' | 'confirmed' | 'lost'; amount: string; confirmed_at: string | null; created_at: string; contact_name: string | null; opportunity_title: string | null }
 
-function SalesPage({ sales }: { sales: SaleRow[] }) {
+function SalesPage({ sales, session, onRefresh }: { sales: SaleRow[]; session: Session; onRefresh: () => Promise<void> }) {
   const totals = sales.reduce((accumulator, sale) => { if (sale.status === 'confirmed') accumulator.confirmed += Number(sale.amount); else if (sale.status === 'detected') accumulator.detected += Number(sale.amount); return accumulator }, { confirmed: 0, detected: 0 })
   const statusLabel: Record<SaleRow['status'], string> = { confirmed: 'Confirmada', detected: 'Em revisão', negotiation: 'Negociação', lost: 'Perdida' }
-  return <><section className="page-head"><div><span className="eyebrow">RECEITA</span><h1>Vendas</h1><p>Separe valores negociados, detectados e confirmados.</p></div></section><section className="sales-summary"><article className="panel"><span>Receita confirmada</span><strong>{money(totals.confirmed)}</strong><small>{sales.filter((sale) => sale.status === 'confirmed').length} venda(s)</small></article><article className="panel"><span>Aguardando confirmação</span><strong>{money(totals.detected)}</strong><small>Venda detectada em conversa</small></article></section><section className="list-panel panel"><div className="list-toolbar"><b>Histórico de vendas</b><span>{sales.length} registro{sales.length === 1 ? '' : 's'}</span></div><div className="data-list">{sales.map((sale) => <div className="data-row data-row--static" key={sale.id}><span className={`sale-status sale-status--${sale.status}`}>{statusLabel[sale.status]}</span><span className="data-row__main"><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda sem contato'}</b><small>{sale.confirmed_at ? `Confirmada em ${new Date(sale.confirmed_at).toLocaleDateString('pt-BR')}` : 'Registrada no CRM'}</small></span><span className="data-row__value">{money(Number(sale.amount))}</span></div>)}{!sales.length && <div className="empty-list"><CircleDollarSign size={19}/><p>As vendas confirmadas aparecerão aqui.</p></div>}</div></section></>
+  return <><section className="page-head"><div><span className="eyebrow">RECEITA</span><h1>Vendas</h1><p>Receita confirmada separada das vendas que a IA sinalizou para sua revisão.</p></div></section><section className="sales-summary"><article className="panel"><span>Receita confirmada</span><strong>{money(totals.confirmed)}</strong><small>{sales.filter((sale) => sale.status === 'confirmed').length} venda(s)</small></article><article className="panel"><span>Revisão da IA</span><strong>{money(totals.detected)}</strong><small>{sales.filter((sale) => sale.status === 'detected').length} venda(s) aguardando aprovação</small></article></section>{sales.some((sale) => sale.status === 'detected') && <section className="ai-review panel"><div><span className="eyebrow">REVISÃO DA IA</span><h2>Confirme o que entrou no faturamento</h2><p>A IA sinaliza uma possível venda; somente sua confirmação registra receita no dashboard.</p></div><div className="ai-review__items">{sales.filter((sale) => sale.status === 'detected').slice(0, 3).map((sale) => <article key={sale.id}><span><ClipboardCheck size={17}/></span><div><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda detectada'}</b><small>Valor identificado: {money(Number(sale.amount))}</small></div><button className="secondary-button" type="button" onClick={() => { void api.confirmSale(session, sale.id).then(onRefresh) }}>Confirmar</button></article>)}</div></section>}<section className="list-panel panel"><div className="list-toolbar"><b>Histórico de vendas</b><span>{sales.length} registro{sales.length === 1 ? '' : 's'}</span></div><div className="data-list">{sales.map((sale) => <div className="data-row data-row--static" key={sale.id}><span className={`sale-status sale-status--${sale.status}`}>{statusLabel[sale.status]}</span><span className="data-row__main"><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda sem contato'}</b><small>{sale.confirmed_at ? `Confirmada em ${new Date(sale.confirmed_at).toLocaleDateString('pt-BR')}` : sale.status === 'detected' ? 'Identificada pela IA · precisa de revisão' : 'Registrada no CRM'}</small></span><span className="data-row__value">{money(Number(sale.amount))}</span></div>)}{!sales.length && <div className="empty-list"><CircleDollarSign size={19}/><p>As vendas confirmadas aparecerão aqui.</p></div>}</div></section></>
 }
 
 type ConversationRow = { id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null }
@@ -210,6 +213,55 @@ function ConversationsPage({ conversations }: { conversations: ConversationRow[]
 
 function Placeholder({ icon: Icon, eyebrow, title, text }: { icon: typeof Bot; eyebrow: string; title: string; text: string }) {
   return <section className="empty-page panel"><div className="empty-page__icon"><Icon size={24}/></div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p><button className="primary-button" type="button"><Plus size={18}/> Configurar agora</button></section>
+}
+
+type TrafficRow = { id: string; source: string; platform: string; period_start: string; period_end: string; spend: string; reported_leads: string; impressions: string; clicks: string; crm_leads: string; confirmed_sales: string; confirmed_revenue: string }
+
+function TrafficPage({ session }: { session: Session }) {
+  const [items, setItems] = useState<TrafficRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [source, setSource] = useState('Meta Ads')
+  const [platform, setPlatform] = useState('Meta Ads')
+  const [spend, setSpend] = useState('')
+  const [reportedLeads, setReportedLeads] = useState('')
+  const today = new Date().toISOString().slice(0, 10)
+  const [periodStart, setPeriodStart] = useState(`${today.slice(0, 8)}01`)
+  const [periodEnd, setPeriodEnd] = useState(today)
+  const load = async () => { setLoading(true); try { setItems(await api.traffic(session)); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o tráfego.') } finally { setLoading(false) } }
+  useEffect(() => { void load() }, [session])
+  const totals = items.reduce((acc, item) => ({ spend: acc.spend + Number(item.spend), revenue: acc.revenue + Number(item.confirmed_revenue), leads: acc.leads + Math.max(Number(item.reported_leads), Number(item.crm_leads)), sales: acc.sales + Number(item.confirmed_sales) }), { spend: 0, revenue: 0, leads: 0, sales: 0 })
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setSaving(true); setError('')
+    try { await api.createTraffic(session, { source, platform, periodStart, periodEnd, spend: Number(spend.replace(',', '.')), reportedLeads: Number(reportedLeads || 0) }); setSpend(''); setReportedLeads(''); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar a métrica.') } finally { setSaving(false) }
+  }
+  return <><section className="page-head"><div><span className="eyebrow">ATRIBUIÇÃO DE RESULTADOS</span><h1>Tráfego pago</h1><p>Relacione investimento, leads e faturamento por origem enquanto a integração Meta Ads não está conectada.</p></div></section><section className="traffic-summary"><MetricCard title="Investimento informado" value={money(totals.spend)} trend="Campanhas cadastradas"/><MetricCard title="Receita atribuída" value={money(totals.revenue)} trend="Somente vendas confirmadas" emphasis/><MetricCard title="ROAS geral" value={totals.spend ? `${(totals.revenue / totals.spend).toFixed(2)}x` : '—'} trend="Receita ÷ investimento"/><MetricCard title="Leads relacionados" value={String(totals.leads)} trend={`${totals.sales} venda(s) confirmada(s)`}/></section><section className="traffic-layout"><form className="traffic-form panel" onSubmit={submit}><div><span className="eyebrow">LANÇAMENTO MANUAL</span><h2>Adicionar investimento</h2><p>Use a mesma origem cadastrada no lead para o CRM atribuir vendas.</p></div><label>Origem ou campanha<input required value={source} onChange={(event) => setSource(event.target.value)} placeholder="Ex.: Meta Ads - Setembro"/></label><label>Plataforma<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option>Meta Ads</option><option>Google Ads</option><option>TikTok Ads</option><option>Outro</option></select></label><div className="form-inline"><label>Início<input required type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)}/></label><label>Fim<input required type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)}/></label></div><div className="form-inline"><label>Investimento (R$)<input required inputMode="decimal" value={spend} onChange={(event) => setSpend(event.target.value)} placeholder="0,00"/></label><label>Leads da campanha<input inputMode="numeric" value={reportedLeads} onChange={(event) => setReportedLeads(event.target.value)} placeholder="Opcional"/></label></div>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Salvando...' : 'Salvar métrica'} <ArrowRight size={16}/></button></form><section className="traffic-table panel"><div className="panel__header"><div><span className="eyebrow">CAMPANHAS REGISTRADAS</span><h2>Resultado por origem</h2></div><span className="count-pill">{items.length}</span></div>{loading ? <p className="page-loading">Carregando métricas...</p> : items.length ? <div className="traffic-rows">{items.map((item) => { const itemLeads = Math.max(Number(item.reported_leads), Number(item.crm_leads)); const itemSpend = Number(item.spend); const revenue = Number(item.confirmed_revenue); return <article key={item.id}><div><b>{item.source}</b><small>{item.platform} · {new Date(`${item.period_start}T12:00:00`).toLocaleDateString('pt-BR')} a {new Date(`${item.period_end}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><span><small>Investimento</small><b>{money(itemSpend)}</b></span><span><small>Leads</small><b>{itemLeads}</b></span><span><small>Receita</small><b>{money(revenue)}</b></span><span><small>ROAS</small><b>{itemSpend ? `${(revenue / itemSpend).toFixed(2)}x` : '—'}</b></span></article> })}</div> : <div className="empty-list"><TrendingUp size={20}/><p>Cadastre o primeiro investimento para acompanhar a atribuição.</p></div>}</section></section></>
+}
+
+function ReportsPage({ session }: { session: Session }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [start, setStart] = useState(`${today.slice(0, 8)}01`)
+  const [end, setEnd] = useState(today)
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.reports>> | null>(null)
+  const [error, setError] = useState('')
+  const load = async () => { try { setData(await api.reports(session, start, end)); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível gerar o relatório.') } }
+  useEffect(() => { void load() }, [session])
+  const refresh = (event: FormEvent) => { event.preventDefault(); void load() }
+  const totals = data?.totals
+  return <><section className="page-head report-head"><div><span className="eyebrow">INTELIGÊNCIA COMERCIAL</span><h1>Relatórios</h1><p>Faturamento só considera vendas que já foram confirmadas no CRM.</p></div><form className="report-filter" onSubmit={refresh}><input type="date" value={start} onChange={(event) => setStart(event.target.value)}/><span>até</span><input type="date" value={end} onChange={(event) => setEnd(event.target.value)}/><button className="primary-button" type="submit">Atualizar</button></form></section>{error && <p className="form-error">{error}</p>}{!data ? <section className="panel page-loading">Gerando relatório...</section> : <><section className="metric-grid"><MetricCard title="Receita confirmada" value={money(Number(totals?.revenue ?? 0))} trend={`${totals?.sales ?? 0} venda(s) no período`} emphasis/><MetricCard title="Leads recebidos" value={String(totals?.leads ?? 0)} trend="Entraram no funil"/><MetricCard title="Ticket médio" value={money(Number(totals?.ticket ?? 0))} trend="Vendas confirmadas"/><MetricCard title="Conversão por lead" value={Number(totals?.leads ?? 0) ? `${((Number(totals?.sales ?? 0) / Number(totals?.leads ?? 1)) * 100).toFixed(1)}%` : '—'} trend="Vendas ÷ leads"/></section><section className="report-layout"><article className="report-panel panel"><div className="panel__header"><div><span className="eyebrow">ORIGEM DA RECEITA</span><h2>O que trouxe resultado</h2></div></div>{data.sources.length ? <div className="report-source-list">{data.sources.map((item) => { const revenue = Number(item.revenue); const spend = Number(item.spend); return <article key={item.source}><div><b>{item.source}</b><small>{item.leads} lead(s) · {item.sales} venda(s)</small></div><span><small>Investimento</small><b>{money(spend)}</b></span><span><small>Receita</small><b>{money(revenue)}</b></span><span><small>ROAS</small><b>{spend ? `${(revenue / spend).toFixed(2)}x` : '—'}</b></span></article>})}</div> : <div className="empty-list"><BarChart3 size={20}/><p>Os resultados por origem aparecerão quando houver leads ou métricas no período.</p></div>}</article><article className="report-panel panel"><div className="panel__header"><div><span className="eyebrow">FUNIL ATUAL</span><h2>Distribuição das oportunidades</h2></div></div><div className="funnel-report">{data.pipeline.map((stage) => <div key={stage.name}><span className={`funnel-dot funnel-dot--${stage.kind}`}/><b>{stage.name}</b><i style={{ width: `${Math.max(8, Math.min(100, Number(stage.total) * 14))}%` }}/><strong>{stage.total}</strong></div>)}</div></article></section></>}</>
+}
+
+function HelpCenter({ onClose, onNavigate }: { onClose: () => void; onNavigate: (page: Page) => void }) {
+  const guides: Array<[string, string, Page]> = [['Conectar WhatsApp', 'Crie uma instância Evolution e leia o QR Code para começar a registrar conversas.', 'configuracoes'], ['Organizar o funil', 'Use as etapas para acompanhar cada lead até Ganhos ou Perdidos.', 'crm'], ['Confirmar uma venda', 'Apenas vendas confirmadas entram na receita do Dashboard e dos Relatórios.', 'vendas'], ['Acompanhar tráfego', 'Cadastre investimento e mantenha a origem do lead igual à campanha.', 'trafego']]
+  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">CENTRAL DE AJUDA</span><h2>Como começar</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><div className="help-guides">{guides.map(([title, text, page]) => <button key={title} type="button" onClick={() => { onNavigate(page); onClose() }}><CircleHelp size={18}/><span><b>{title}</b><small>{text}</small></span><ChevronRight size={17}/></button>)}</div></Modal>
+}
+
+type Notification = { id: string; type: 'channel' | 'lead' | 'trial'; title: string; body: string; action: string }
+
+function NotificationsPanel({ notifications, onClose, onNavigate }: { notifications: Notification[]; onClose: () => void; onNavigate: (page: Page) => void }) {
+  const target: Record<Notification['type'], Page> = { channel: 'configuracoes', lead: 'crm', trial: 'configuracoes' }
+  return <section className="notifications-panel" aria-label="Notificações"><header><span><Bell size={16}/> Notificações</span><button type="button" onClick={onClose}><X size={16}/></button></header>{notifications.length ? notifications.map((item) => <article key={item.id}><b>{item.title}</b><p>{item.body}</p><button type="button" onClick={() => { onNavigate(target[item.type]); onClose() }}>{item.action}</button></article>) : <div className="empty-list"><CheckCircle2 size={19}/><p>Você está em dia.</p></div>}</section>
 }
 
 function Integrations({ session, account, onRequestAccess }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void }) {
@@ -418,6 +470,36 @@ function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuth
   return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">OTIMIZA AI CRM</span><h2>{mode === 'login' ? 'Acesse sua empresa' : 'Teste o CRM por 7 dias'}</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Como quer ser chamado?"/></label><label>Nome da empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'login' ? 'Entrar no CRM' : 'Criar teste gratuito'} <ArrowRight size={16}/></button></form><button className="modal__switch" type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? 'Ainda não tenho conta · testar por 7 dias' : 'Já tenho conta · entrar'}</button></Modal>
 }
 
+function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, isNew: boolean) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('register')
+  const [name, setName] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [segment, setSegment] = useState('')
+  const [objective, setObjective] = useState('')
+  const [usesAutomation, setUsesAutomation] = useState(false)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setSaving(true); setError('')
+    try {
+      const session = mode === 'login' ? await api.login(email, password) : await api.register({ name, companyName, email, password, segment, objective, usesOtimizaAutomation: usesAutomation })
+      onAuthenticated(session, mode === 'register')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível acessar sua conta.') } finally { setSaving(false) }
+  }
+  return <main className="access-page"><section className="access-brand"><div className="access-brand__top"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI"/></div><span>otimiza <b>AI</b></span></div><div className="access-copy"><span className="eyebrow">OTIMIZA AI CRM</span><h1>Seu atendimento vira resultado mensurável.</h1><p>Leads, WhatsApp, vendas e tráfego no mesmo painel para você entender o que está aumentando o faturamento.</p><div className="access-benefits"><span><CheckCircle2 size={17}/> Leitura centralizada das conversas</span><span><CheckCircle2 size={17}/> Funil e faturamento em tempo real</span><span><CheckCircle2 size={17}/> Teste completo por 7 dias</span></div></div><small>© {new Date().getFullYear()} Otimiza AI</small></section><section className="access-form-wrap"><div className="access-form"><div className="access-tabs"><button className={mode === 'register' ? 'is-active' : ''} type="button" onClick={() => { setMode('register'); setError('') }}>Teste grátis</button><button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => { setMode('login'); setError('') }}>Entrar</button></div><div className="access-form__head"><span className="eyebrow">{mode === 'register' ? 'COMECE AGORA' : 'BEM-VINDO DE VOLTA'}</span><h2>{mode === 'register' ? 'Experimente o CRM por 7 dias.' : 'Acesse sua empresa.'}</h2><p>{mode === 'register' ? 'Sem cartão. Você configura o WhatsApp depois do cadastro.' : 'Use seu e-mail e senha para continuar.'}</p></div><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><div className="form-inline"><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome"/></label><label>Empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></div><label>Segmento<select required value={segment} onChange={(event) => setSegment(event.target.value)}><option value="">Selecione seu segmento</option><option>Serviços</option><option>Clínica e saúde</option><option>Varejo</option><option>Imobiliário</option><option>Educação</option><option>Outro</option></select></label><label>Seu objetivo principal<select required value={objective} onChange={(event) => setObjective(event.target.value)}><option value="">Selecione um objetivo</option><option>Organizar os leads</option><option>Medir vendas e faturamento</option><option>Acompanhar atendimento no WhatsApp</option><option>Entender o retorno do tráfego pago</option></select></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'register' ? 'Começar teste gratuito' : 'Entrar no CRM'} <ArrowRight size={16}/></button></form></div></section></main>
+}
+
+function Onboarding({ account, onClose, onNavigate }: { account: { uses_automation: boolean; company_name: string }; onClose: () => void; onNavigate: (page: Page) => void }) {
+  const automation = account.uses_automation
+  return <Modal onClose={onClose}><section className="onboarding"><span className="onboarding__mark"><CheckCircle2 size={24}/></span><span className="eyebrow">CONTA CRIADA</span><h2>Bem-vindo, {account.company_name}.</h2><p>{automation ? 'Identificamos que sua empresa usa a automação Otimiza AI. Solicite a conexão para alinharmos sua instância e seus fluxos.' : 'Seu espaço está pronto. O próximo passo é conectar seu WhatsApp para começar a registrar conversas e leads.'}</p><button className="primary-button" type="button" onClick={() => { onNavigate('configuracoes'); onClose() }}>{automation ? 'Solicitar conexão da equipe' : 'Conectar WhatsApp'} <ArrowRight size={16}/></button><button className="modal__switch" type="button" onClick={onClose}>Explorar o CRM primeiro</button></section></Modal>
+}
+
+function TrialExpired({ onSignOut }: { onSignOut: () => void }) {
+  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Escolha um plano com a equipe Otimiza AI para reativar o acesso.</p><button className="primary-button" type="button">Falar com a Otimiza AI <ArrowRight size={16}/></button><button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
+}
+
 function LeadDrawer({ lead, onClose, onAdvance, onRegisterSale }: { lead: Lead; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void }) {
   const currentIndex = stages.indexOf(lead.stage)
   return <aside className="drawer" aria-label={`Detalhes de ${lead.name}`}>
@@ -449,25 +531,32 @@ const temperatureLabel: Record<'new' | 'warm' | 'hot', Lead['temperature']> = { 
 const initialsFor = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'NC'
 
 export default function App() {
-  const [page, setPage] = useState<Page>('crm')
+  const [page, setPage] = useState<Page>('dashboard')
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
-  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; uses_automation: boolean; role: string } | null>(null)
+  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
   const [sales, setSales] = useState<SaleRow[]>([])
   const [conversations, setConversations] = useState<ConversationRow[]>([])
   const [showAccess, setShowAccess] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [notifications, setNotifications] = useState<Notification[]>([])
   const [showLeadForm, setShowLeadForm] = useState(false)
   const [showSaleForm, setShowSaleForm] = useState(false)
   const [syncError, setSyncError] = useState('')
   const [stageIds, setStageIds] = useState<Record<string, string>>({})
 
   const loadWorkspace = async (activeSession: Session) => {
-    const [me, dashboard, crm, salesResult, conversationsResult] = await Promise.all([api.me(activeSession), api.dashboard(activeSession), api.crm(activeSession), api.sales(activeSession), api.conversations(activeSession)])
+    const me = await api.me(activeSession)
+    setAccount(me)
+    if (me.access_state === 'expired') return
+    const [dashboard, crm, salesResult, conversationsResult, notificationsResult] = await Promise.all([api.dashboard(activeSession), api.crm(activeSession), api.sales(activeSession), api.conversations(activeSession), api.notifications(activeSession)])
     const freshLeads: Lead[] = crm.flatMap((stage) => stage.opportunities.map((opportunity) => ({
       id: opportunity.id,
       opportunityId: opportunity.id,
@@ -484,12 +573,12 @@ export default function App() {
       owner: me.name,
       avatar: initialsFor(me.name),
     })))
-    setAccount(me)
     setStageIds(Object.fromEntries(crm.map((stage) => [stage.name, stage.id])))
     setMetrics({ confirmedRevenue: Number(dashboard.confirmed_revenue), confirmedSales: Number(dashboard.confirmed_sales), openLeads: Number(dashboard.open_leads), averageTicket: Number(dashboard.average_ticket), leadsThisMonth: Number(dashboard.leads_this_month) })
     setLeads(freshLeads)
     setSales(salesResult)
     setConversations(conversationsResult)
+    setNotifications(notificationsResult)
     setSyncError('')
   }
 
@@ -498,14 +587,15 @@ export default function App() {
     void loadWorkspace(session).catch((reason) => setSyncError(reason instanceof Error ? reason.message : 'Não foi possível sincronizar seus dados.'))
   }, [session])
 
-  const authenticateSession = (nextSession: Session) => {
+  const authenticateSession = (nextSession: Session, isNew = false) => {
     localStorage.setItem('otimiza-crm-session', JSON.stringify(nextSession))
+    setShowOnboarding(isNew)
     setSession(nextSession)
   }
 
   const signOut = () => {
     localStorage.removeItem('otimiza-crm-session')
-    setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSales([]); setConversations([]); setSelectedLead(null)
+    setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSales([]); setConversations([]); setNotifications([]); setSelectedLead(null); setShowOnboarding(false)
   }
 
   const addLead = () => {
@@ -556,28 +646,28 @@ export default function App() {
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
-    if (page === 'vendas') return <SalesPage sales={sales}/>
+    if (page === 'vendas') return <SalesPage sales={sales} session={session!} onRefresh={() => loadWorkspace(session!)}/>
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} />
-    const copy: Record<'trafego' | 'relatorios', [typeof Bot, string, string, string]> = {
-      trafego: [TrendingUp, 'META ADS', 'Do anúncio à venda.', 'Conecte sua conta de anúncios para relacionar investimento, leads e receita atribuída.'],
-      relatorios: [BarChart3, 'RESULTADOS', 'Relatórios que explicam o crescimento.', 'Compare períodos, fontes e desempenho da equipe em relatórios exportáveis.'],
-    }
-    const [icon, eyebrow, title, text] = copy[page as 'trafego' | 'relatorios']
-    return <Placeholder icon={icon} eyebrow={eyebrow} title={title} text={text} />
+    if (page === 'trafego') return <TrafficPage session={session!}/>
+    return <ReportsPage session={session!}/>
   }
+
+  if (!session) return <AccessPage onAuthenticated={authenticateSession}/>
+  if (account?.access_state === 'expired') return <TrialExpired onSignOut={signOut}/>
+  if (!account) return <main className="workspace-loading"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI"/></div><p>{syncError || 'Carregando o espaço da sua empresa...'}</p>{syncError && <button className="session-button" type="button" onClick={signOut}>Voltar ao acesso</button>}</main>
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div></div>
-        <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account?.company_name ?? 'Clínica Vitta')}</span><span><b>{account?.company_name ?? 'Clínica Vitta'}</b><small>{account ? `Plano ${account.plan}` : 'Demonstração'}</small></span><ChevronDown size={16}/></button>
+        <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account.company_name)}</span><span><b>{account.company_name}</b><small>{account.access_state === 'trial' ? 'Teste gratuito' : `Plano ${account.plan}`}</small></span><ChevronDown size={16}/></button>
         <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button>)}</nav>
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button"><Sparkles size={15}/> Central de ajuda</button>{session ? <button className="session-button" type="button" onClick={signOut}>Sair</button> : <button className="session-button" type="button" onClick={() => setShowAccess(true)}>Entrar</button>}<button className="notification-button" type="button" aria-label="Notificações"><Bell size={19}/><i/></button></div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)}/></>}
-      {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
+      {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
       {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
     </div>
   )

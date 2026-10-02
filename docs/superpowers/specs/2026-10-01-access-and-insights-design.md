@@ -59,6 +59,12 @@ Relatórios usam os dados reais do CRM por empresa e filtro de período. A pági
 
 Os números de receita consideram apenas vendas com status `confirmed`. Valores em negociação e vendas detectadas não entram em faturamento. A primeira versão mostra os relatórios em tela e permite impressão pelo navegador; exportação CSV/PDF fica posterior.
 
+## Revisão de vendas identificadas por IA
+
+A IA não altera o faturamento automaticamente. Quando uma automação ou uma futura análise de conversa identificar uma venda provável, ela cria uma venda com status `detected`, valor e evidência da conversa. A página Vendas apresenta essa fila como **Revisão da IA**.
+
+O gestor confirma o registro antes de ele entrar na receita. A confirmação muda o status para `confirmed`, registra a data de confirmação e move a oportunidade relacionada para Ganhos. Esse fluxo permite integrar modelos de IA depois sem que uma interpretação incorreta altere os indicadores financeiros.
+
 ## Central de ajuda e notificações
 
 A Central de ajuda abre um painel com passos de conexão por Evolution, explicação de cada etapa do funil, como confirmar uma venda e como cadastrar uma origem de tráfego. Não depende de IA nem de atendimento externo.
