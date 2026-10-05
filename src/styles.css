@@ -104,3 +104,125 @@ body { background: #f7f8fc; }
 .dashboard-empty { padding: 18px 0; color: #8b93a0; font-size: 10px; line-height: 1.55; }
 @media (max-width: 1050px) { .access-page { grid-template-columns: 1fr; }.access-brand { min-height: 315px; padding: 32px clamp(28px, 7vw, 70px); }.access-copy { padding: 30px 0; }.access-copy h1 { font-size: 37px; }.access-benefits { display: none; }.traffic-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }.traffic-layout, .report-layout, .ai-review { grid-template-columns: 1fr; }.traffic-table, .report-panel { overflow-x: auto; }.traffic-rows, .report-source-list { min-width: 600px; } }
 @media (max-width: 620px) { .access-brand { min-height: 270px; }.access-copy h1 { font-size: 32px; }.access-copy > p { font-size: 12px; }.form-inline, .traffic-summary { grid-template-columns: 1fr; }.report-filter { width: 100%; flex-wrap: wrap; }.report-filter input { flex: 1 1 130px; }.ai-review__items article { grid-template-columns: 29px 1fr; }.ai-review__items .secondary-button { grid-column: 2; justify-self: start; }.traffic-rows, .report-source-list { min-width: 560px; } }
+
+/* Access page */
+.access-page {
+  display: block;
+  min-height: 100vh;
+  padding: 20px;
+  color: #1d2030;
+  background:
+    radial-gradient(circle at 4% 0%, rgba(179, 247, 214, .46), transparent 29%),
+    radial-gradient(circle at 100% 98%, rgba(128, 120, 246, .23), transparent 32%),
+    #f5f6fa;
+}
+.access-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 62px;
+  padding: 0 19px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: 19px;
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 8px 30px rgba(41, 44, 87, .035);
+  backdrop-filter: blur(16px);
+}
+.access-topbar__brand { display: inline-flex; align-items: center; gap: 11px; color: #202334; font-size: 16px; font-weight: 700; letter-spacing: -.8px; }
+.access-topbar__brand b { color: #6b63e8; }
+.access-topbar__brand small { padding-left: 6px; color: #888a9b; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+.access-topbar__logo { display: grid; width: 35px; height: 35px; place-items: center; padding: 6px; border-radius: 11px; background: #202131; box-shadow: 0 5px 13px rgba(29, 31, 55, .18); }
+.access-topbar__logo img { width: 100%; height: 100%; object-fit: contain; }
+.access-topbar__message { display: inline-flex; align-items: center; gap: 8px; color: #858995; font-size: 10px; font-weight: 500; }
+.access-topbar__message i { width: 7px; height: 7px; border-radius: 50%; background: #20bd92; box-shadow: 0 0 0 4px rgba(32, 189, 146, .12); }
+.access-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 20px; min-height: calc(100vh - 122px); }
+.access-brand, .access-form-wrap { min-width: 0; min-height: calc(100vh - 122px); border-radius: 29px; }
+.access-brand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  padding: clamp(38px, 4vw, 68px);
+  color: #fff;
+  background:
+    linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px),
+    radial-gradient(circle at 83% 13%, rgba(115, 99, 240, .42), transparent 30%),
+    #171a24;
+  background-size: 48px 48px, 48px 48px, auto, auto;
+  box-shadow: 0 24px 42px rgba(18, 20, 36, .12);
+}
+.access-brand__glow { position: absolute; top: 5%; right: 8%; width: 235px; height: 235px; border-radius: 50%; background: #7d6cff; filter: blur(88px); opacity: .5; pointer-events: none; }
+.access-copy { position: relative; z-index: 1; align-self: auto; max-width: 650px; padding: 0; }
+.access-pill { display: inline-flex; align-items: center; gap: 9px; padding: 10px 14px; color: #e9e7ff; border: 1px solid rgba(255,255,255,.15); border-radius: 99px; background: rgba(255,255,255,.07); font-size: 11px; font-weight: 500; backdrop-filter: blur(8px); }
+.access-pill > span { width: 7px; height: 7px; border-radius: 50%; background: #72e5c2; box-shadow: 0 0 12px #72e5c2; }
+.access-copy h1 { max-width: 650px; margin: 30px 0 24px; color: #fbfbff; font-size: clamp(46px, 5.35vw, 84px); font-weight: 700; line-height: 1.08; letter-spacing: -.072em; }
+.access-copy h1 em { color: #9a8dff; font-style: normal; }
+.access-copy > p { max-width: 550px; margin: 0; color: #bfc3d2; font-size: clamp(14px, 1.12vw, 17px); line-height: 1.8; }
+.access-visual { position: relative; z-index: 1; width: min(100%, 560px); margin: 80px auto 8px; }
+.access-visual__orb { position: absolute; left: -35px; bottom: 15px; width: 132px; height: 132px; border-radius: 35px; background: linear-gradient(135deg, rgba(154, 141, 255, .95), rgba(91, 216, 185, .82)); filter: blur(.2px); transform: rotate(-12deg); }
+.access-preview { position: relative; padding: 18px; border: 1px solid rgba(255,255,255,.2); border-radius: 21px; background: rgba(43, 47, 60, .94); box-shadow: 0 22px 65px rgba(4, 7, 21, .35); transform: rotate(-3deg); }
+.access-preview__head, .access-preview__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #eceefa; font-size: 12px; font-weight: 600; }
+.access-preview__head > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.access-preview__head i { width: 7px; height: 7px; border-radius: 50%; background: #6ae1bc; }
+.access-preview__live { padding: 7px 10px; color: #cef7e8; border-radius: 99px; background: rgba(74, 190, 156, .16); font-size: 10px; }
+.access-preview__row { display: grid; grid-template-columns: 38px 1fr 18px; align-items: center; gap: 12px; padding: 13px; margin-top: 11px; color: #9fa7b9; border: 1px solid rgba(255,255,255,.06); border-radius: 13px; background: rgba(255,255,255,.065); }
+.access-preview__row > span:nth-child(2) { min-width: 0; }
+.access-preview__row b, .access-preview__row small { display: block; }
+.access-preview__row b { color: #f8f9ff; font-size: 12px; font-weight: 600; }
+.access-preview__row small { margin-top: 4px; color: #aeb4c4; font-size: 10px; }
+.access-preview__icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 11px; }
+.access-preview__icon--violet { color: #bcafff; background: rgba(146, 128, 255, .18); }
+.access-preview__icon--mint { color: #77e7c7; background: rgba(68, 201, 158, .16); }
+.access-preview__foot { padding: 17px 2px 2px; color: #aeb5c7; font-size: 10px; font-weight: 500; }
+.access-preview__foot > span { display: inline-flex; align-items: center; gap: 8px; }
+.access-preview__foot > svg { color: #82e4c9; }
+.access-preview__sparkle { display: grid; width: 22px; height: 22px; place-items: center; color: #a99cff; border-radius: 7px; background: rgba(151, 136, 255, .13); }
+.access-form-wrap { display: grid; place-items: center; padding: 54px clamp(28px, 6vw, 90px); border: 1px solid rgba(255,255,255,.96); background: radial-gradient(circle at 94% 1%, rgba(189, 244, 225, .38), transparent 25%), linear-gradient(145deg, #fafbff, #f4f6fc); box-shadow: 0 24px 42px rgba(39, 45, 83, .045); }
+.access-form { width: min(100%, 460px); }
+.access-form__head { margin-bottom: 31px; }
+.access-form__eyebrow { color: #76778b; font-size: 11px; font-weight: 700; letter-spacing: .025em; }
+.access-form__head h2 { margin: 13px 0 14px; color: #1c2030; font-size: clamp(34px, 3.15vw, 48px); font-weight: 700; line-height: 1.14; letter-spacing: -.065em; }
+.access-form__head p { max-width: 385px; margin: 0; color: #818797; font-size: 13px; line-height: 1.7; }
+.access-form__fields { gap: 16px; }
+.access-form__fields label { gap: 8px; color: #33394a; font-size: 11px; font-weight: 700; }
+.access-form__fields input, .access-form__fields select { height: 54px; padding: 0 16px; border-color: #e0e3eb; border-radius: 12px; color: #2c3343; background: rgba(255,255,255,.93); font-size: 12px; box-shadow: 0 2px 3px rgba(38, 45, 69, .015); }
+.access-form__fields input::placeholder { color: #a3a9b3; }
+.access-input { position: relative; }
+.access-input > input { padding-right: 48px; }
+.access-input > svg, .access-input > button { position: absolute; top: 50%; right: 16px; color: #9a9fad; transform: translateY(-50%); }
+.access-input > button { display: grid; width: 25px; height: 25px; place-items: center; padding: 0; border: 0; background: transparent; }
+.access-input > button:hover { color: #675fe0; }
+.access-form__fields .checkbox-field { display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 9px; color: #656d7c; font-size: 11px; font-weight: 500; }
+.access-form__fields .checkbox-field input { height: 16px; }
+.access-form__fields .form-error { font-size: 11px; }
+.access-form__fields .access-submit { display: flex; justify-content: center; height: 57px; margin-top: 6px; border: 0; border-radius: 12px; background: #28234b; box-shadow: 0 13px 22px rgba(53, 43, 113, .18); font-size: 13px; }
+.access-form__fields .access-submit:hover { background: #494088; }
+.access-switch { margin-top: 30px; color: #858b98; font-size: 11px; text-align: center; }
+.access-switch button { padding: 0 0 2px 3px; color: #625bd7; border: 0; border-bottom: 1px solid #8982ea; background: transparent; font-size: inherit; font-weight: 700; }
+.access-switch button:hover { color: #423bb6; }
+.access-secure { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 25px 0 0; color: #a0a6b2; font-size: 10px; }
+@media (max-width: 1050px) {
+  .access-layout { grid-template-columns: 1fr; }
+  .access-brand, .access-form-wrap { min-height: auto; }
+  .access-brand { gap: 28px; padding: 46px; }
+  .access-copy h1 { max-width: 650px; font-size: clamp(44px, 7vw, 70px); }
+  .access-visual { width: min(100%, 480px); margin: 15px auto 6px; }
+  .access-form-wrap { padding: 70px 35px; }
+}
+@media (max-width: 620px) {
+  .access-page { padding: 12px; }
+  .access-topbar { min-height: 56px; padding: 0 13px; margin-bottom: 12px; border-radius: 15px; }
+  .access-topbar__message { display: none; }
+  .access-layout { gap: 12px; }
+  .access-brand { gap: 0; min-height: auto; padding: 34px 27px; border-radius: 21px; }
+  .access-copy h1 { margin: 22px 0 14px; font-size: clamp(40px, 10vw, 55px); }
+  .access-copy > p { font-size: 12px; line-height: 1.65; }
+  .access-pill { padding: 8px 10px; font-size: 9px; }
+  .access-visual { display: none; }
+  .access-form-wrap { padding: 48px 24px; border-radius: 21px; }
+  .access-form__head h2 { font-size: 35px; }
+  .access-form__head p { font-size: 12px; }
+}

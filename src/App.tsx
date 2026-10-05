@@ -12,11 +12,14 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock3,
+  Eye,
+  EyeOff,
   Filter,
   Goal,
   Link2,
   LayoutDashboard,
   LockKeyhole,
+  Mail,
   MessageCircleMore,
   MoreHorizontal,
   Plus,
@@ -461,7 +464,7 @@ function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuth
 }
 
 function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, isNew: boolean) => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('register')
+  const [mode, setMode] = useState<'login' | 'register'>('login')
   const [name, setName] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [email, setEmail] = useState('')
@@ -471,6 +474,12 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
   const [usesAutomation, setUsesAutomation] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const switchMode = (nextMode: 'login' | 'register') => {
+    setMode(nextMode)
+    setError('')
+    setShowPassword(false)
+  }
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError('')
     try {
@@ -478,7 +487,56 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
       onAuthenticated(session, mode === 'register')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível acessar sua conta.') } finally { setSaving(false) }
   }
-  return <main className="access-page"><section className="access-brand"><div className="access-brand__top"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI"/></div><span>otimiza <b>AI</b></span></div><div className="access-copy"><span className="eyebrow">OTIMIZA AI CRM</span><h1>Seu atendimento vira resultado mensurável.</h1><p>Leads, WhatsApp, vendas e tráfego no mesmo painel para você entender o que está aumentando o faturamento.</p><div className="access-benefits"><span><CheckCircle2 size={17}/> Leitura centralizada das conversas</span><span><CheckCircle2 size={17}/> Funil e faturamento em tempo real</span><span><CheckCircle2 size={17}/> Teste completo por 7 dias</span></div></div><small>© {new Date().getFullYear()} Otimiza AI</small></section><section className="access-form-wrap"><div className="access-form"><div className="access-tabs"><button className={mode === 'register' ? 'is-active' : ''} type="button" onClick={() => { setMode('register'); setError('') }}>Teste grátis</button><button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => { setMode('login'); setError('') }}>Entrar</button></div><div className="access-form__head"><span className="eyebrow">{mode === 'register' ? 'COMECE AGORA' : 'BEM-VINDO DE VOLTA'}</span><h2>{mode === 'register' ? 'Experimente o CRM por 7 dias.' : 'Acesse sua empresa.'}</h2><p>{mode === 'register' ? 'Sem cartão. Você configura o WhatsApp depois do cadastro.' : 'Use seu e-mail e senha para continuar.'}</p></div><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><div className="form-inline"><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome"/></label><label>Empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></div><label>Segmento<select required value={segment} onChange={(event) => setSegment(event.target.value)}><option value="">Selecione seu segmento</option><option>Serviços</option><option>Clínica e saúde</option><option>Varejo</option><option>Imobiliário</option><option>Educação</option><option>Outro</option></select></label><label>Seu objetivo principal<select required value={objective} onChange={(event) => setObjective(event.target.value)}><option value="">Selecione um objetivo</option><option>Organizar os leads</option><option>Medir vendas e faturamento</option><option>Acompanhar atendimento no WhatsApp</option><option>Entender o retorno do tráfego pago</option></select></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'register' ? 'Começar teste gratuito' : 'Entrar no CRM'} <ArrowRight size={16}/></button></form></div></section></main>
+  return (
+    <main className="access-page">
+      <header className="access-topbar">
+        <div className="access-topbar__brand"><span className="access-topbar__logo"><img src={otimizaSymbol} alt=""/></span><span>otimiza <b>AI</b><small>CRM</small></span></div>
+        <span className="access-topbar__message"><i/> Seu atendimento em movimento</span>
+      </header>
+      <div className="access-layout">
+        <section className="access-brand" aria-label="Conheça o Otimiza AI CRM">
+          <div className="access-brand__glow" aria-hidden="true"/>
+          <div className="access-copy">
+            <span className="access-pill"><span/> CRM conectado ao seu negócio</span>
+            <h1>Transforme conversas em <em>resultados.</em></h1>
+            <p>Organize seus leads, acompanhe cada etapa do funil e veja com clareza o faturamento que seu atendimento gera.</p>
+          </div>
+          <div className="access-visual" aria-hidden="true">
+            <div className="access-visual__orb"/>
+            <div className="access-preview">
+              <div className="access-preview__head"><span><i/> Visão do seu funil</span><span className="access-preview__live">Visão integrada</span></div>
+              <div className="access-preview__row"><span className="access-preview__icon access-preview__icon--violet"><UsersRound size={18}/></span><span><b>Novo lead identificado</b><small>Origem e conversa reunidas</small></span><ChevronRight size={18}/></div>
+              <div className="access-preview__row"><span className="access-preview__icon access-preview__icon--mint"><CheckCircle2 size={18}/></span><span><b>Venda confirmada</b><small>Valor registrado no dashboard</small></span><ChevronRight size={18}/></div>
+              <div className="access-preview__foot"><span><span className="access-preview__sparkle"><Sparkles size={14}/></span> Do primeiro contato ao resultado</span><TrendingUp size={18}/></div>
+            </div>
+          </div>
+        </section>
+        <section className="access-form-wrap" aria-label={mode === 'login' ? 'Entrar no CRM' : 'Criar conta'}>
+          <div className="access-form">
+            <div className="access-form__head">
+              <span className="access-form__eyebrow">{mode === 'login' ? 'BEM-VINDO DE VOLTA' : 'COMECE AGORA'}</span>
+              <h2>{mode === 'login' ? <>Acesse seu<br/>espaço de trabalho.</> : <>Crie sua conta<br/>na Otimiza AI.</>}</h2>
+              <p>{mode === 'login' ? 'Acompanhe seus leads, conversas e resultados em um só lugar.' : 'Experimente o CRM por 7 dias. Sem cartão de crédito.'}</p>
+            </div>
+            <form className="form-stack access-form__fields" onSubmit={submit}>
+              {mode === 'register' && <>
+                <div className="form-inline"><label>Seu nome<input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome"/></label><label>Empresa<input required autoComplete="organization" value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></div>
+                <label>Segmento<select required value={segment} onChange={(event) => setSegment(event.target.value)}><option value="">Selecione seu segmento</option><option>Serviços</option><option>Clínica e saúde</option><option>Varejo</option><option>Imobiliário</option><option>Educação</option><option>Outro</option></select></label>
+                <label>Seu objetivo principal<select required value={objective} onChange={(event) => setObjective(event.target.value)}><option value="">Selecione um objetivo</option><option>Organizar os leads</option><option>Medir vendas e faturamento</option><option>Acompanhar atendimento no WhatsApp</option><option>Entender o retorno do tráfego pago</option></select></label>
+              </>}
+              <label>E-mail profissional<div className="access-input"><input required autoComplete="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/><Mail size={18} aria-hidden="true"/></div></label>
+              <label>Senha<div className="access-input"><input required autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'login' ? 'Digite sua senha' : 'Mínimo de 8 caracteres'}/><button type="button" onClick={() => setShowPassword((shown) => !shown)} aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}>{showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}</button></div></label>
+              {mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <button className="primary-button access-submit" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'login' ? 'Entrar no CRM' : 'Começar teste gratuito'} <ArrowRight size={18}/></button>
+            </form>
+            <div className="access-switch">{mode === 'login' ? 'Ainda não tem conta?' : 'Já tem uma conta?'} <button type="button" onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? 'Experimente por 7 dias' : 'Entrar no CRM'}</button></div>
+            <p className="access-secure"><LockKeyhole size={13}/> Acesso seguro aos dados da sua empresa</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  )
 }
 
 function Onboarding({ account, onClose, onNavigate }: { account: { uses_automation: boolean; company_name: string }; onClose: () => void; onNavigate: (page: Page) => void }) {
