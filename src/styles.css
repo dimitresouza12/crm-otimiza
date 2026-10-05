@@ -108,16 +108,17 @@ body { background: #f7f8fc; }
 /* Access page */
 .access-page {
   display: block;
-  min-height: 100vh;
+  height: 100dvh;
   padding: 20px;
+  overflow: hidden;
   color: #1d2030;
   background:
     radial-gradient(circle at 4% 0%, rgba(179, 247, 214, .46), transparent 29%),
     radial-gradient(circle at 100% 98%, rgba(128, 120, 246, .23), transparent 32%),
     #f5f6fa;
 }
-.access-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 20px; min-height: calc(100vh - 40px); }
-.access-brand, .access-form-wrap { min-width: 0; min-height: calc(100vh - 40px); border-radius: 29px; }
+.access-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 20px; height: calc(100dvh - 40px); }
+.access-brand, .access-form-wrap { min-width: 0; height: 100%; border-radius: 29px; }
 .access-brand {
   position: relative;
   display: flex;
@@ -141,7 +142,7 @@ body { background: #f7f8fc; }
 .access-copy h1 { max-width: 650px; margin: 30px 0 24px; color: #fbfbff; font-size: clamp(46px, 5.35vw, 84px); font-weight: 700; line-height: 1.08; letter-spacing: -.072em; }
 .access-copy h1 em { color: #9a8dff; font-style: normal; }
 .access-copy > p { max-width: 550px; margin: 0; color: #bfc3d2; font-size: clamp(14px, 1.12vw, 17px); line-height: 1.8; }
-.access-visual { position: relative; z-index: 1; width: min(100%, 560px); margin: 80px auto 8px; }
+.access-visual { position: relative; z-index: 1; width: min(100%, 560px); margin: clamp(26px, 4vh, 52px) auto 0; }
 .access-visual__orb { position: absolute; left: -35px; bottom: 15px; width: 132px; height: 132px; border-radius: 35px; background: linear-gradient(135deg, rgba(154, 141, 255, .95), rgba(91, 216, 185, .82)); filter: blur(.2px); transform: rotate(-12deg); }
 .access-preview { position: relative; padding: 18px; border: 1px solid rgba(255,255,255,.2); border-radius: 21px; background: rgba(43, 47, 60, .94); box-shadow: 0 22px 65px rgba(4, 7, 21, .35); transform: rotate(-3deg); }
 .access-preview__head, .access-preview__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #eceefa; font-size: 12px; font-weight: 600; }
@@ -184,9 +185,15 @@ body { background: #f7f8fc; }
 .access-switch button { padding: 0 0 2px 3px; color: #625bd7; border: 0; border-bottom: 1px solid #8982ea; background: transparent; font-size: inherit; font-weight: 700; }
 .access-switch button:hover { color: #423bb6; }
 .access-secure { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 25px 0 0; color: #a0a6b2; font-size: 10px; }
+@media (max-height: 800px) and (min-width: 1051px) {
+  .access-brand { padding-block: 38px; }
+  .access-copy h1 { margin-block: 22px 17px; font-size: clamp(43px, 4.7vw, 68px); }
+  .access-visual { margin-top: 20px; transform: scale(.78); transform-origin: top center; }
+}
 @media (max-width: 1050px) {
-  .access-layout { grid-template-columns: 1fr; }
-  .access-brand, .access-form-wrap { min-height: auto; }
+  .access-page { height: auto; min-height: 100dvh; overflow: visible; }
+  .access-layout { grid-template-columns: 1fr; height: auto; min-height: 100dvh; }
+  .access-brand, .access-form-wrap { height: auto; min-height: auto; }
   .access-brand { gap: 28px; padding: 46px; }
   .access-copy h1 { max-width: 650px; font-size: clamp(44px, 7vw, 70px); }
   .access-visual { width: min(100%, 480px); margin: 15px auto 6px; }
@@ -194,7 +201,7 @@ body { background: #f7f8fc; }
 }
 @media (max-width: 620px) {
   .access-page { padding: 12px; }
-  .access-layout { gap: 12px; min-height: calc(100vh - 24px); }
+  .access-layout { gap: 12px; min-height: calc(100dvh - 24px); }
   .access-brand { gap: 0; min-height: auto; padding: 34px 27px; border-radius: 21px; }
   .access-copy h1 { margin: 22px 0 14px; font-size: clamp(40px, 10vw, 55px); }
   .access-copy > p { font-size: 12px; line-height: 1.65; }
