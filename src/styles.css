@@ -233,3 +233,56 @@ body { background: #f7f8fc; }
 .access-page--register { height: auto; min-height: 100dvh; overflow: visible; }.access-page--register .access-layout { height: auto; min-height: calc(100dvh - 40px); }.access-plan-summary { display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; padding: 10px; margin: -12px 0 17px; border: 1px solid #dedbfb; border-radius: 10px; background: #f8f7ff; }.access-plan-summary > span { display: grid; width: 30px; height: 30px; place-items: center; color: #665bd4; border-radius: 8px; background: #ece9ff; }.access-plan-summary small, .access-plan-summary b, .access-plan-summary p { display: block; }.access-plan-summary small { color: #817abf; font: 500 7px 'DM Mono', monospace; letter-spacing: .07em; }.access-plan-summary b { margin-top: 3px; color: #474e5e; font-size: 9px; }.access-plan-summary p { margin: 3px 0 0; color: #818997; font-size: 8px; }.access-plan-summary button { padding: 0; color: #5f56c8; border: 0; background: transparent; font-size: 8px; font-weight: 700; }.trial-card__contact { width: 100%; margin-top: 3px; }.trial-card__contact-note { padding: 9px; margin-bottom: 13px!important; color: #767f90!important; border-radius: 8px; background: #f5f5f8; font-size: 9px!important; }
 @media (max-width: 900px) { .landing-header nav { display: none; }.landing-hero { grid-template-columns: 1fr; gap: 35px; padding-top: 60px; }.landing-hero__copy { max-width: 620px; }.landing-hero__visual { max-width: 620px; padding-left: 0; margin: auto; }.landing-feature-card, .landing-feature-card--revenue, .landing-origin, .landing-faq { grid-template-columns: 1fr; }.landing-feature-card { gap: 30px; }.landing-feature-card--revenue > :first-child { grid-row: 2; }.landing-origin { gap: 35px; }.landing-faq { gap: 28px; }.landing-calculator { grid-template-columns: 1fr; }.landing-calculator__total { justify-items: start; }.landing-final { align-items: flex-start; flex-direction: column; }.access-page--register .access-layout { align-items: stretch; }.access-page--register .access-brand { min-height: 360px; } }
 @media (max-width: 620px) { .landing-header, .landing-hero, .landing-proof, .landing-section, .landing-final, .landing-footer { width: min(100% - 32px, 1180px); }.landing-header { height: 68px; }.landing-header__actions { gap: 10px; }.landing-login { display: none; }.landing-brand { font-size: 14px; }.landing-brand__mark { width: 28px; height: 28px; }.landing-hero { min-height: auto; padding: 49px 0 65px; }.landing-hero h1 { font-size: clamp(40px, 13vw, 57px); }.landing-hero__copy > p { font-size: 13px; }.landing-hero__actions { align-items: flex-start; flex-direction: column; }.landing-demo-app__body { grid-template-columns: 62px 1fr; min-height: 225px; }.landing-demo-app__body aside { padding: 11px 7px; }.landing-demo-app__body aside span { justify-content: center; }.landing-demo-app__body aside span svg { width: 14px; }.landing-demo-app__body aside span:not(.is-active) { font-size: 0; }.landing-demo-app__body aside .is-active { font-size: 0; }.landing-demo-app__body > section { padding: 15px 11px; }.landing-demo-metrics { grid-template-columns: 1fr; }.landing-demo-metrics article:nth-child(2) { display: none; }.landing-float-card { right: -8px; width: 208px; }.landing-proof { display: grid; grid-template-columns: 1fr; justify-items: center; gap: 12px; padding: 21px 0; margin-bottom: 75px; }.landing-proof span { padding: 0; border: 0; }.landing-section { margin-bottom: 80px; }.landing-section h2 { font-size: 32px; }.landing-steps, .landing-plan-cards { grid-template-columns: 1fr; }.landing-steps { margin-top: 31px; }.landing-feature-card { padding: 27px; border-radius: 17px; }.landing-kanban-demo > div { grid-template-columns: repeat(3, 145px); }.landing-revenue-demo { min-height: 235px; padding: 25px; }.landing-revenue-total strong { font-size: 30px; }.landing-revenue-bars { right: 25px; left: 25px; height: 105px; }.landing-origin-demo { padding: 19px; }.landing-origin-row { grid-template-columns: 7px 86px 1fr; }.landing-origin-row strong { display: none; }.landing-pricing { padding: 0; }.landing-calculator { gap: 18px; padding: 17px; }.landing-calculator__controls { display: grid; gap: 14px; }.landing-plan-switch button { padding: 0 8px; font-size: 8px; }.landing-plan-card { min-height: 410px; padding: 25px; }.landing-final { padding: 32px 28px; }.landing-footer { align-items: flex-start; flex-direction: column; gap: 12px; padding: 23px 0; }.access-page--register .access-brand { display: none; }.access-page--register .access-form-wrap { padding-block: 42px; }.access-plan-summary { margin-top: -4px; } }
+
+/* Fixed-height access and trial screens */
+body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
+.access-page--register { height: 100dvh; min-height: 0; overflow: hidden; }
+.access-page--register .access-layout { height: calc(100dvh - 40px); min-height: 0; }
+.access-page--register .access-form-wrap { padding-block: 24px; }
+.access-page--register .access-form { width: min(100%, 460px); }
+.access-page--register .access-form__head { margin-bottom: 15px; }
+.access-page--register .access-form__head h2 { margin: 7px 0 8px; font-size: clamp(28px, 2.65vw, 38px); }
+.access-page--register .access-form__head p { font-size: 11px; line-height: 1.45; }
+.access-page--register .access-plan-summary { margin: -4px 0 11px; padding: 8px 10px; }
+.access-page--register .access-form__fields { gap: 9px; }
+.access-page--register .access-form__fields label { gap: 5px; font-size: 10px; }
+.access-page--register .access-form__fields input,
+.access-page--register .access-form__fields select { height: 43px; border-radius: 10px; font-size: 11px; }
+.access-page--register .access-form__fields .access-submit { height: 46px; margin-top: 2px; font-size: 12px; }
+.access-page--register .access-switch { margin-top: 15px; }
+.access-page--register .access-secure { margin-top: 14px; }
+.trial-page { height: 100dvh; min-height: 0; overflow: hidden; }
+
+@media (max-width: 1050px) {
+  .access-page,
+  .access-page--register { height: 100dvh; min-height: 0; overflow: hidden; }
+  .access-layout,
+  .access-page--register .access-layout { grid-template-columns: 1fr; height: calc(100dvh - 40px); min-height: 0; }
+  .access-brand { display: none; }
+  .access-form-wrap { height: 100%; min-height: 0; padding: 28px; }
+}
+
+@media (max-width: 620px) {
+  .access-page { padding: 12px; }
+  .access-layout,
+  .access-page--register .access-layout { height: calc(100dvh - 24px); }
+  .access-form-wrap { padding: 20px; border-radius: 21px; }
+  .access-form__head { margin-bottom: 18px; }
+  .access-form__head h2 { margin-block: 8px; font-size: 32px; }
+  .access-form__head p { font-size: 11px; line-height: 1.5; }
+  .access-page--register .access-form-wrap { padding: 14px 18px; }
+  .access-page--register .access-form__head { margin-bottom: 10px; }
+  .access-page--register .access-form__head h2 { font-size: 28px; }
+  .access-page--register .access-form__head p { display: none; }
+  .access-page--register .access-plan-summary { margin-bottom: 8px; }
+  .access-page--register .access-secure { display: none; }
+  .trial-card { padding: 30px 24px; }
+}
+
+@media (max-height: 700px) {
+  .access-page--register .access-form { zoom: .84; }
+  .trial-card { zoom: .9; }
+}
+
+/* The registration form keeps only the action controls visible in the fixed viewport. */
+.access-page--register .access-secure { display: none; }
