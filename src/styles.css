@@ -116,28 +116,8 @@ body { background: #f7f8fc; }
     radial-gradient(circle at 100% 98%, rgba(128, 120, 246, .23), transparent 32%),
     #f5f6fa;
 }
-.access-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 62px;
-  padding: 0 19px;
-  margin-bottom: 20px;
-  border: 1px solid rgba(255,255,255,.8);
-  border-radius: 19px;
-  background: rgba(255,255,255,.72);
-  box-shadow: 0 8px 30px rgba(41, 44, 87, .035);
-  backdrop-filter: blur(16px);
-}
-.access-topbar__brand { display: inline-flex; align-items: center; gap: 11px; color: #202334; font-size: 16px; font-weight: 700; letter-spacing: -.8px; }
-.access-topbar__brand b { color: #6b63e8; }
-.access-topbar__brand small { padding-left: 6px; color: #888a9b; font-size: 9px; font-weight: 700; letter-spacing: 1px; }
-.access-topbar__logo { display: grid; width: 35px; height: 35px; place-items: center; padding: 6px; border-radius: 11px; background: #202131; box-shadow: 0 5px 13px rgba(29, 31, 55, .18); }
-.access-topbar__logo img { width: 100%; height: 100%; object-fit: contain; }
-.access-topbar__message { display: inline-flex; align-items: center; gap: 8px; color: #858995; font-size: 10px; font-weight: 500; }
-.access-topbar__message i { width: 7px; height: 7px; border-radius: 50%; background: #20bd92; box-shadow: 0 0 0 4px rgba(32, 189, 146, .12); }
-.access-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 20px; min-height: calc(100vh - 122px); }
-.access-brand, .access-form-wrap { min-width: 0; min-height: calc(100vh - 122px); border-radius: 29px; }
+.access-layout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 20px; min-height: calc(100vh - 40px); }
+.access-brand, .access-form-wrap { min-width: 0; min-height: calc(100vh - 40px); border-radius: 29px; }
 .access-brand {
   position: relative;
   display: flex;
@@ -214,9 +194,7 @@ body { background: #f7f8fc; }
 }
 @media (max-width: 620px) {
   .access-page { padding: 12px; }
-  .access-topbar { min-height: 56px; padding: 0 13px; margin-bottom: 12px; border-radius: 15px; }
-  .access-topbar__message { display: none; }
-  .access-layout { gap: 12px; }
+  .access-layout { gap: 12px; min-height: calc(100vh - 24px); }
   .access-brand { gap: 0; min-height: auto; padding: 34px 27px; border-radius: 21px; }
   .access-copy h1 { margin: 22px 0 14px; font-size: clamp(40px, 10vw, 55px); }
   .access-copy > p { font-size: 12px; line-height: 1.65; }

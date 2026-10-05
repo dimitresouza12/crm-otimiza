@@ -489,10 +489,6 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
   }
   return (
     <main className="access-page">
-      <header className="access-topbar">
-        <div className="access-topbar__brand"><span className="access-topbar__logo"><img src={otimizaSymbol} alt=""/></span><span>otimiza <b>AI</b><small>CRM</small></span></div>
-        <span className="access-topbar__message"><i/> Seu atendimento em movimento</span>
-      </header>
       <div className="access-layout">
         <section className="access-brand" aria-label="Conheça o Otimiza AI CRM">
           <div className="access-brand__glow" aria-hidden="true"/>
@@ -515,7 +511,7 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
           <div className="access-form">
             <div className="access-form__head">
               <span className="access-form__eyebrow">{mode === 'login' ? 'BEM-VINDO DE VOLTA' : 'COMECE AGORA'}</span>
-              <h2>{mode === 'login' ? <>Acesse seu<br/>espaço de trabalho.</> : <>Crie sua conta<br/>na Otimiza AI.</>}</h2>
+              <h2>{mode === 'login' ? <>Acesse seu<br/>CRM.</> : <>Crie sua conta<br/>na Otimiza AI.</>}</h2>
               <p>{mode === 'login' ? 'Acompanhe seus leads, conversas e resultados em um só lugar.' : 'Experimente o CRM por 7 dias. Sem cartão de crédito.'}</p>
             </div>
             <form className="form-stack access-form__fields" onSubmit={submit}>
