@@ -76,6 +76,111 @@ const initialLeads: Lead[] = [
 
 const money = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 })
 
+type PurchasablePlan = 'crm' | 'chatbot'
+type PublicRoute = 'landing' | 'login' | 'signup' | 'app'
+type SignupSelection = { plan: PurchasablePlan; channelLimit: number }
+
+const publicPlans: Record<PurchasablePlan, { name: string; baseCents: number; extraCents: number; description: string; features: string[] }> = {
+  crm: {
+    name: 'Otimiza CRM', baseCents: 8_990, extraCents: 2_990,
+    description: 'Para organizar o atendimento e acompanhar cada resultado comercial.',
+    features: ['Kanban de leads e etapas', 'Conversas por WhatsApp', 'Faturamento confirmado', 'Origem do lead e tráfego informado'],
+  },
+  chatbot: {
+    name: 'Otimiza CRM + Chatbot', baseCents: 17_990, extraCents: 3_990,
+    description: 'Para quem também quer configurar respostas automáticas por número.',
+    features: ['Tudo do Otimiza CRM', 'Chatbot configurável', 'Regras por palavra-chave', 'Boas-vindas e resposta padrão'],
+  },
+}
+
+const formatCents = (cents: number) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const selectedPrice = (plan: PurchasablePlan, channelLimit: number) => publicPlans[plan].baseCents + (channelLimit - 1) * publicPlans[plan].extraCents
+const planTitle = (plan: string) => plan === 'chatbot' ? 'Otimiza CRM + Chatbot' : 'Otimiza CRM'
+const routeFromPath = (path: string): PublicRoute => path === '/entrar' ? 'login' : path === '/cadastro' ? 'signup' : path === '/app' ? 'app' : 'landing'
+const selectionFromLocation = (): SignupSelection => {
+  const params = new URLSearchParams(window.location.search)
+  const plan = params.get('plano') === 'chatbot' ? 'chatbot' : 'crm'
+  const rawLimit = Number(params.get('numeros') ?? '1')
+  return { plan, channelLimit: Number.isInteger(rawLimit) && rawLimit >= 1 && rawLimit <= 5 ? rawLimit : 1 }
+}
+const signupPath = (selection: SignupSelection) => `/cadastro?plano=${selection.plan}&numeros=${selection.channelLimit}`
+const salesHref = (phone: string, message = 'Olá! Quero conversar sobre o Otimiza AI CRM.') => phone ? `https://wa.me/${phone}?text=${encodeURIComponent(message)}` : undefined
+
+function BrandLockup({ dark = false }: { dark?: boolean }) {
+  return <span className={`landing-brand ${dark ? 'landing-brand--dark' : ''}`}><span className="landing-brand__mark"><img src={otimizaSymbol} alt="" /></span><span>otimiza <b>AI</b><small>CRM</small></span></span>
+}
+
+function LandingPage({ onNavigate, salesWhatsapp }: { onNavigate: (path: string) => void; salesWhatsapp: string }) {
+  const [plan, setPlan] = useState<PurchasablePlan>('crm')
+  const [channelLimit, setChannelLimit] = useState(1)
+  const activePlan = publicPlans[plan]
+  const activePrice = selectedPrice(plan, channelLimit)
+  const startTrial = (nextPlan = plan, nextLimit = channelLimit) => onNavigate(signupPath({ plan: nextPlan, channelLimit: nextLimit }))
+  const whatsapp = salesHref(salesWhatsapp)
+  return <main className="landing-page">
+    <header className="landing-header">
+      <a className="landing-logo-link" href="/" onClick={(event) => { event.preventDefault(); onNavigate('/') }} aria-label="Página inicial do Otimiza AI CRM"><BrandLockup dark /></a>
+      <nav aria-label="Navegação da página"><a href="#recursos">Recursos</a><a href="#planos">Planos</a><a href="#perguntas">Dúvidas</a></nav>
+      <div className="landing-header__actions"><button className="landing-login" type="button" onClick={() => onNavigate('/entrar')}>Entrar</button><button className="landing-button landing-button--small" type="button" onClick={() => startTrial()}>Teste grátis <ArrowRight size={15}/></button></div>
+    </header>
+
+    <section className="landing-hero">
+      <div className="landing-hero__copy">
+        <span className="landing-kicker"><i/> CRM para quem atende pelo WhatsApp</span>
+        <h1>De conversa em conversa, <em>resultado visível.</em></h1>
+        <p>Organize seus leads, acompanhe as vendas confirmadas e entenda de onde cada oportunidade chegou.</p>
+        <div className="landing-hero__actions"><button className="landing-button" type="button" onClick={() => startTrial()}>Experimentar por 7 dias <ArrowRight size={18}/></button>{whatsapp && <a className="landing-text-link" href={whatsapp} target="_blank" rel="noreferrer">Falar com a Otimiza <MessageCircleMore size={17}/></a>}</div>
+        <p className="landing-trial-note"><CheckCircle2 size={15}/> Sem cartão de crédito. Cobrança somente depois do teste.</p>
+      </div>
+      <div className="landing-hero__visual" aria-label="Demonstração do painel Otimiza AI CRM">
+        <span className="landing-demo-label">Demonstração</span>
+        <div className="landing-demo-app">
+          <header><BrandLockup/><span><i/> Atualizado agora</span></header>
+          <div className="landing-demo-app__body">
+            <aside><span className="is-active"><LayoutDashboard size={16}/> Dashboard</span><span><Target size={16}/> CRM</span><span><UsersRound size={16}/> Leads</span><span><MessageCircleMore size={16}/> Conversas</span><span><CircleDollarSign size={16}/> Vendas</span></aside>
+            <section>
+              <div className="landing-demo-title"><div><small>VISÃO GERAL</small><b>Resultados do mês</b></div><span>Set. 2026</span></div>
+              <div className="landing-demo-metrics"><article><small>Faturamento confirmado</small><b>R$ 18.740</b><span>↗ 24% este mês</span></article><article><small>Leads recebidos</small><b>126</b><span>34 em negociação</span></article></div>
+              <div className="landing-demo-chart"><div><span>R$ 18k</span><span>R$ 12k</span><span>R$ 6k</span></div><svg viewBox="0 0 420 122" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="landingChart" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#8a7dff" stopOpacity=".32"/><stop offset="100%" stopColor="#8a7dff" stopOpacity="0"/></linearGradient></defs><path d="M0 104 C29 100 39 87 62 91 S97 108 123 75 S158 83 185 61 S220 72 248 39 S282 54 311 31 S352 45 378 16 S399 24 420 8 L420 122 L0 122Z" fill="url(#landingChart)"/><path d="M0 104 C29 100 39 87 62 91 S97 108 123 75 S158 83 185 61 S220 72 248 39 S282 54 311 31 S352 45 378 16 S399 24 420 8" fill="none" stroke="#7669ef" strokeWidth="3" strokeLinecap="round"/></svg></div>
+            </section>
+          </div>
+        </div>
+        <article className="landing-float-card"><span className="landing-float-card__icon"><CheckCircle2 size={18}/></span><div><small>Venda confirmada</small><b>R$ 2.890 entrou no faturamento</b></div></article>
+      </div>
+    </section>
+
+    <section className="landing-proof" aria-label="Benefícios do Otimiza AI CRM"><span><b>7 dias</b> para testar tudo</span><span><b>1 lugar</b> para atendimento e resultado</span><span><b>5 números</b> em uma mesma conta</span></section>
+
+    <section className="landing-section landing-how" id="recursos">
+      <div className="landing-section__intro"><span className="landing-section__eyebrow">FLUXO SIMPLES</span><h2>Seu atendimento deixa de ficar espalhado.</h2><p>O CRM organiza a operação desde a entrada do lead até a confirmação da venda.</p></div>
+      <div className="landing-steps"><article><span>01</span><div className="landing-step-icon"><Link2 size={21}/></div><h3>Conecte o WhatsApp</h3><p>Crie sua conta e conecte cada número pelo QR Code da Evolution.</p></article><article><span>02</span><div className="landing-step-icon landing-step-icon--purple"><Target size={21}/></div><h3>Organize o funil</h3><p>Leads entram no Kanban e sua equipe acompanha a etapa de cada negociação.</p></article><article><span>03</span><div className="landing-step-icon landing-step-icon--mint"><CircleDollarSign size={21}/></div><h3>Confirme o resultado</h3><p>Quando uma venda é confirmada, o valor aparece no faturamento do painel.</p></article></div>
+    </section>
+
+    <section className="landing-section landing-feature-grid">
+      <article className="landing-feature-card landing-feature-card--kanban"><div><span className="landing-section__eyebrow">CRM + WHATSAPP</span><h2>O Kanban acompanha o ritmo de cada conversa.</h2><p>Encontre o próximo passo, registre valores e avance o lead com sua equipe.</p><ul><li><CheckCircle2 size={16}/> Etapas personalizáveis</li><li><CheckCircle2 size={16}/> Histórico centralizado</li><li><CheckCircle2 size={16}/> Vários números por conta</li></ul></div><div className="landing-kanban-demo" aria-label="Exemplo demonstrativo de Kanban"><span className="landing-demo-label">Demonstração</span><div><section><b>Novos leads</b><small>3 contatos</small><article><span>MC</span><strong>Mariana Costa</strong><small>Quero saber os valores</small><i>Meta Ads</i></article><article><span>LA</span><strong>Lucas Almeida</strong><small>Tem disponibilidade?</small><i>Orgânico</i></article></section><section><b>Negociação</b><small>2 contatos</small><article><span>PV</span><strong>Paulo Viana</strong><small>Fecho hoje nessa condição</small><i>R$ 1.500</i></article></section><section><b>Ganhos</b><small>1 contato</small><article><span>RM</span><strong>Ricardo Matos</strong><small>Pagamento confirmado</small><i>R$ 2.100</i></article></section></div></div></article>
+      <article className="landing-feature-card landing-feature-card--revenue"><div className="landing-revenue-demo"><span className="landing-demo-label">Demonstração</span><div className="landing-revenue-total"><small>Faturamento confirmado</small><strong>R$ 18.740</strong><span>12 vendas confirmadas</span></div><div className="landing-revenue-bars"><i style={{ height: '42%' }}/><i style={{ height: '62%' }}/><i style={{ height: '51%' }}/><i style={{ height: '78%' }}/><i style={{ height: '92%' }}/><i style={{ height: '72%' }}/></div></div><div><span className="landing-section__eyebrow">RESULTADOS REAIS</span><h2>Faturamento que se apoia em vendas confirmadas.</h2><p>O total do painel reúne somente os valores que sua equipe confirmou. Assim, você vê o que de fato entrou no resultado.</p><a href="#perguntas">Entenda o cálculo <ArrowRight size={16}/></a></div></article>
+    </section>
+
+    <section className="landing-section landing-origin">
+      <div><span className="landing-section__eyebrow">ORIGEM DOS LEADS</span><h2>Veja o que está trazendo oportunidades para o seu negócio.</h2><p>Registre a origem quando o lead entrar e informe o investimento de cada fonte no CRM. A visualização reúne seus dados comerciais e de tráfego.</p><div className="landing-origin__notice"><ShieldCheck size={17}/><span>Nesta fase, o investimento é informado no CRM. A integração automática com Meta Ads não faz parte da oferta inicial.</span></div></div>
+      <div className="landing-origin-demo" aria-label="Demonstração de origem de leads"><span className="landing-demo-label">Demonstração</span><header><div><small>ORIGEM DOS RESULTADOS</small><b>Leads e receita</b></div><span>Setembro</span></header><div className="landing-origin-row"><i className="landing-origin-dot landing-origin-dot--purple"/><b>Campanha clínica</b><span><em style={{ width: '78%' }}/></span><strong>R$ 9.540</strong></div><div className="landing-origin-row"><i className="landing-origin-dot landing-origin-dot--mint"/><b>Indicação</b><span><em style={{ width: '52%' }}/></span><strong>R$ 5.310</strong></div><div className="landing-origin-row"><i className="landing-origin-dot landing-origin-dot--coral"/><b>Orgânico</b><span><em style={{ width: '36%' }}/></span><strong>R$ 3.890</strong></div><footer>Dados demonstrativos. Receita considera vendas confirmadas.</footer></div>
+    </section>
+
+    <section className="landing-section landing-pricing" id="planos">
+      <div className="landing-section__intro landing-section__intro--center"><span className="landing-section__eyebrow">PLANOS MENSAIS</span><h2>Comece com o plano certo para o seu atendimento.</h2><p>Todos começam com 7 dias grátis, sem cartão. Você escolhe o número de WhatsApps antes de criar a conta.</p></div>
+      <div className="landing-calculator" aria-label="Calculadora de planos"><div className="landing-calculator__controls"><fieldset><legend>Plano</legend><div className="landing-plan-switch"><button type="button" className={plan === 'crm' ? 'is-active' : ''} onClick={() => setPlan('crm')}>CRM</button><button type="button" className={plan === 'chatbot' ? 'is-active' : ''} onClick={() => setPlan('chatbot')}>CRM + Chatbot</button></div></fieldset><fieldset><legend>Números de WhatsApp</legend><div className="landing-number-switch">{[1, 2, 3, 4, 5].map((count) => <button type="button" aria-pressed={channelLimit === count} className={channelLimit === count ? 'is-active' : ''} key={count} onClick={() => setChannelLimit(count)}>{count}</button>)}</div></fieldset></div><div className="landing-calculator__total"><small>{activePlan.name}</small><strong>{formatCents(activePrice)}<small>/mês</small></strong><span>1 número incluso{channelLimit > 1 ? ` + ${channelLimit - 1} adicional${channelLimit === 2 ? '' : 'is'}` : ''}</span><button className="landing-button" type="button" onClick={() => startTrial()}>Começar teste grátis <ArrowRight size={17}/></button></div></div>
+      <div className="landing-plan-cards">{(Object.keys(publicPlans) as PurchasablePlan[]).map((item) => { const current = publicPlans[item]; const total = selectedPrice(item, channelLimit); return <article className={item === 'chatbot' ? 'landing-plan-card landing-plan-card--featured' : 'landing-plan-card'} key={item}>{item === 'chatbot' && <span className="landing-plan-card__badge">Para automatizar respostas</span>}<span className="landing-section__eyebrow">{item === 'crm' ? 'ESSENCIAL' : 'CHATBOT'}</span><h3>{current.name}</h3><p>{current.description}</p><strong>{formatCents(total)}<small>/mês</small></strong><span className="landing-plan-card__detail">{channelLimit === 1 ? '1 número incluso' : `1 número incluso + ${channelLimit - 1} adicional${channelLimit === 2 ? '' : 'is'}`}</span><ul>{current.features.map((feature) => <li key={feature}><CheckCircle2 size={16}/>{feature}</li>)}</ul><button className={item === 'chatbot' ? 'landing-button' : 'landing-outline-button'} type="button" onClick={() => startTrial(item, channelLimit)}>Testar por 7 dias <ArrowRight size={16}/></button></article>})}</div>
+      <p className="landing-pricing-note">Número adicional: {formatCents(activePlan.extraCents)}/mês no plano selecionado. A contratação é concluída com a equipe Otimiza após o teste.</p>
+    </section>
+
+    <section className="landing-section landing-faq" id="perguntas"><div className="landing-faq__intro"><span className="landing-section__eyebrow">PERGUNTAS FREQUENTES</span><h2>Para começar com clareza.</h2><p>Se ainda restar alguma dúvida, fale com a nossa equipe.</p>{whatsapp && <a className="landing-text-link" href={whatsapp} target="_blank" rel="noreferrer">Chamar no WhatsApp <MessageCircleMore size={17}/></a>}</div><div className="landing-faq__list"><details><summary>Como conecto meu WhatsApp?<ChevronRight size={18}/></summary><p>Depois de criar a conta, acesse Configurações e conecte cada número pelo QR Code. O CRM registra as conversas do número conectado.</p></details><details><summary>Como sei de onde o lead veio?<ChevronRight size={18}/></summary><p>Você pode registrar a origem ao criar o lead ou padronizar as origens usadas pela equipe, como campanha, indicação, orgânico e Google.</p></details><details><summary>Como o faturamento é calculado?<ChevronRight size={18}/></summary><p>O faturamento reúne apenas vendas confirmadas no CRM. Valores em negociação ficam separados até a confirmação.</p></details><details><summary>Qual é a diferença do plano Chatbot?<ChevronRight size={18}/></summary><p>Ele libera a aba de Chatbot para criar mensagens de boas-vindas, respostas padrão e regras por palavra-chave para cada número conectado.</p></details><details><summary>Posso integrar mais de um número?<ChevronRight size={18}/></summary><p>Sim. Cada plano começa com um número e permite contratar até cinco. O total é atualizado no cadastro conforme a quantidade escolhida.</p></details><details><summary>O teste grátis pede cartão?<ChevronRight size={18}/></summary><p>Não. O teste dura 7 dias e não cria cobrança automática. Ao término, sua escolha fica registrada e a equipe da Otimiza conclui a contratação.</p></details></div></section>
+
+    <section className="landing-final"><div><span className="landing-kicker"><i/> Comece em poucos minutos</span><h2>Seu próximo resultado pode começar com uma conversa organizada.</h2><p>Crie a conta, conecte seu WhatsApp e acompanhe seu funil por 7 dias.</p></div><button className="landing-button landing-button--light" type="button" onClick={() => startTrial()}>Experimentar o CRM <ArrowRight size={18}/></button></section>
+    <footer className="landing-footer"><a href="/" onClick={(event) => { event.preventDefault(); onNavigate('/') }}><BrandLockup dark /></a><span>© {new Date().getFullYear()} Otimiza AI. CRM para resultados comerciais.</span><button type="button" onClick={() => onNavigate('/entrar')}>Entrar no CRM</button></footer>
+  </main>
+}
+
+
 const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'crm', label: 'CRM', icon: Target },
@@ -463,8 +568,8 @@ function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuth
   return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">OTIMIZA AI CRM</span><h2>{mode === 'login' ? 'Acesse sua empresa' : 'Teste o CRM por 7 dias'}</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}>{mode === 'register' && <><label>Seu nome<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Como quer ser chamado?"/></label><label>Nome da empresa<input required value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></>}<label>E-mail<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com"/></label><label>Senha<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 8 caracteres"/></label>{mode === 'register' && <label className="checkbox-field"><input type="checkbox" checked={usesAutomation} onChange={(event) => setUsesAutomation(event.target.checked)}/><span>Já uso a automação da Otimiza AI</span></label>}{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Aguarde...' : mode === 'login' ? 'Entrar no CRM' : 'Criar teste gratuito'} <ArrowRight size={16}/></button></form><button className="modal__switch" type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>{mode === 'login' ? 'Ainda não tenho conta · testar por 7 dias' : 'Já tenho conta · entrar'}</button></Modal>
 }
 
-function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, isNew: boolean) => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
+function AccessPage({ initialMode, selection, onAuthenticated, onNavigate }: { initialMode: 'login' | 'register'; selection: SignupSelection; onAuthenticated: (session: Session, isNew: boolean) => void; onNavigate: (path: string) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode)
   const [name, setName] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [email, setEmail] = useState('')
@@ -475,20 +580,28 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const plan = publicPlans[selection.plan]
+  const price = selectedPrice(selection.plan, selection.channelLimit)
+
+  useEffect(() => { setMode(initialMode); setError(''); setShowPassword(false) }, [initialMode])
+
   const switchMode = (nextMode: 'login' | 'register') => {
     setMode(nextMode)
     setError('')
     setShowPassword(false)
+    onNavigate(nextMode === 'login' ? '/entrar' : signupPath(selection))
   }
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError('')
     try {
-      const session = mode === 'login' ? await api.login(email, password) : await api.register({ name, companyName, email, password, segment, objective, usesOtimizaAutomation: usesAutomation })
+      const session = mode === 'login'
+        ? await api.login(email, password)
+        : await api.register({ name, companyName, email, password, segment, objective, usesOtimizaAutomation: usesAutomation, plan: selection.plan, channelLimit: selection.channelLimit })
       onAuthenticated(session, mode === 'register')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível acessar sua conta.') } finally { setSaving(false) }
   }
   return (
-    <main className="access-page">
+    <main className={`access-page ${mode === 'register' ? 'access-page--register' : ''}`}>
       <div className="access-layout">
         <section className="access-brand" aria-label="Conheça o Otimiza AI CRM">
           <div className="access-brand__glow" aria-hidden="true"/>
@@ -510,10 +623,11 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
         <section className="access-form-wrap" aria-label={mode === 'login' ? 'Entrar no CRM' : 'Criar conta'}>
           <div className="access-form">
             <div className="access-form__head">
-              <span className="access-form__eyebrow">{mode === 'login' ? 'BEM-VINDO DE VOLTA' : 'COMECE AGORA'}</span>
+              <span className="access-form__eyebrow">{mode === 'login' ? 'BEM-VINDO DE VOLTA' : 'SEU TESTE GRATUITO'}</span>
               <h2>{mode === 'login' ? <>Acesse seu<br/>CRM.</> : <>Crie sua conta<br/>na Otimiza AI.</>}</h2>
-              <p>{mode === 'login' ? 'Acompanhe seus leads, conversas e resultados em um só lugar.' : 'Experimente o CRM por 7 dias. Sem cartão de crédito.'}</p>
+              <p>{mode === 'login' ? 'Acompanhe seus leads, conversas e resultados em um só lugar.' : 'Teste o CRM por 7 dias. Sem cartão de crédito e sem cobrança automática.'}</p>
             </div>
+            {mode === 'register' && <aside className="access-plan-summary" aria-label="Escolha do plano"><span><Bot size={16}/></span><div><small>PLANO ESCOLHIDO</small><b>{plan.name} · {selection.channelLimit} número{selection.channelLimit === 1 ? '' : 's'}</b><p>{formatCents(price)}/mês após o teste</p></div><button type="button" onClick={() => onNavigate('/#planos')}>Alterar</button></aside>}
             <form className="form-stack access-form__fields" onSubmit={submit}>
               {mode === 'register' && <>
                 <div className="form-inline"><label>Seu nome<input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome"/></label><label>Empresa<input required autoComplete="organization" value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Sua empresa"/></label></div>
@@ -534,14 +648,14 @@ function AccessPage({ onAuthenticated }: { onAuthenticated: (session: Session, i
     </main>
   )
 }
-
 function Onboarding({ account, onClose, onNavigate }: { account: { uses_automation: boolean; company_name: string }; onClose: () => void; onNavigate: (page: Page) => void }) {
   const automation = account.uses_automation
   return <Modal onClose={onClose}><section className="onboarding"><span className="onboarding__mark"><CheckCircle2 size={24}/></span><span className="eyebrow">CONTA CRIADA</span><h2>Bem-vindo, {account.company_name}.</h2><p>{automation ? 'Identificamos que sua empresa usa a automação Otimiza AI. Solicite a conexão para alinharmos sua instância e seus fluxos.' : 'Seu espaço está pronto. O próximo passo é conectar seu WhatsApp para começar a registrar conversas e leads.'}</p><button className="primary-button" type="button" onClick={() => { onNavigate('configuracoes'); onClose() }}>{automation ? 'Solicitar conexão da equipe' : 'Conectar WhatsApp'} <ArrowRight size={16}/></button><button className="modal__switch" type="button" onClick={onClose}>Explorar o CRM primeiro</button></section></Modal>
 }
 
-function TrialExpired({ onSignOut }: { onSignOut: () => void }) {
-  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Escolha um plano com a equipe Otimiza AI para reativar o acesso.</p><button className="primary-button" type="button">Falar com a Otimiza AI <ArrowRight size={16}/></button><button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
+function TrialExpired({ onSignOut, account, salesWhatsapp }: { onSignOut: () => void; account: { plan: string; channel_limit: number; plan_price_cents: number }; salesWhatsapp: string }) {
+  const whatsapp = salesHref(salesWhatsapp, `Olá! Meu teste do ${planTitle(account.plan)} terminou. Quero ativar ${account.channel_limit} número${account.channel_limit === 1 ? '' : 's'} no CRM.`)
+  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Sua escolha registrada foi <b>{planTitle(account.plan)}</b> com <b>{account.channel_limit} número{account.channel_limit === 1 ? '' : 's'}</b>{account.plan_price_cents > 0 ? ` por ${formatCents(account.plan_price_cents)}/mês` : ''}.</p>{whatsapp ? <a className="primary-button trial-card__contact" href={whatsapp} target="_blank" rel="noreferrer">Falar com a Otimiza AI <ArrowRight size={16}/></a> : <p className="trial-card__contact-note">O contato comercial será configurado pela Otimiza AI antes da publicação.</p>}<button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
 }
 
 function LeadDrawer({ lead, onClose, onAdvance, onRegisterSale }: { lead: Lead; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void }) {
@@ -575,6 +689,8 @@ const temperatureLabel: Record<'new' | 'warm' | 'hot', Lead['temperature']> = { 
 const initialsFor = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'NC'
 
 export default function App() {
+  const [route, setRoute] = useState<PublicRoute>(() => routeFromPath(window.location.pathname))
+  const [salesWhatsapp, setSalesWhatsapp] = useState('')
   const [page, setPage] = useState<Page>('dashboard')
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
@@ -582,7 +698,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
-  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
+  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
   const [sales, setSales] = useState<SaleRow[]>([])
   const [conversations, setConversations] = useState<ConversationRow[]>([])
@@ -595,6 +711,44 @@ export default function App() {
   const [showSaleForm, setShowSaleForm] = useState(false)
   const [syncError, setSyncError] = useState('')
   const [stageIds, setStageIds] = useState<Record<string, string>>({})
+
+  const navigate = (path: string, replace = false) => {
+    const target = new URL(path, window.location.origin)
+    const href = `${target.pathname}${target.search}${target.hash}`
+    if (replace) window.history.replaceState({}, '', href)
+    else window.history.pushState({}, '', href)
+    setRoute(routeFromPath(target.pathname))
+    if (target.hash) requestAnimationFrame(() => document.querySelector(target.hash)?.scrollIntoView({ behavior: 'smooth' }))
+    else window.scrollTo({ top: 0, behavior: 'auto' })
+  }
+
+  useEffect(() => {
+    const onPopState = () => setRoute(routeFromPath(window.location.pathname))
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? ''
+    void fetch(`${apiUrl}/api/public/config`).then((response) => response.ok ? response.json() as Promise<{ salesWhatsapp?: string }> : null).then((data) => setSalesWhatsapp(String(data?.salesWhatsapp ?? '').replace(/\D/g, ''))).catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    const isLanding = route === 'landing'
+    document.title = isLanding ? 'Otimiza AI CRM — transforme conversas em resultados' : route === 'signup' ? 'Criar conta — Otimiza AI CRM' : route === 'login' ? 'Entrar — Otimiza AI CRM' : 'Otimiza AI CRM'
+    const setMeta = (selector: string, content: string) => {
+      const element = document.querySelector(selector)
+      if (element) element.setAttribute('content', content)
+    }
+    setMeta('meta[name="robots"]', isLanding ? 'index,follow' : 'noindex,nofollow')
+    setMeta('meta[name="description"]', isLanding ? 'Otimiza AI CRM: leads, conversas, faturamento confirmado e origem dos resultados em um só lugar.' : 'Acesso ao Otimiza AI CRM.')
+    setMeta('meta[property="og:title"]', isLanding ? 'Otimiza AI CRM — transforme conversas em resultados' : 'Otimiza AI CRM')
+  }, [route])
+
+  useEffect(() => {
+    if (!session && route === 'app') navigate('/entrar', true)
+    if (session && (route === 'login' || route === 'signup')) navigate('/app', true)
+  }, [route, session])
 
   const loadWorkspace = async (activeSession: Session) => {
     const me = await api.me(activeSession)
@@ -635,11 +789,13 @@ export default function App() {
     localStorage.setItem('otimiza-crm-session', JSON.stringify(nextSession))
     setShowOnboarding(isNew)
     setSession(nextSession)
+    navigate('/app', true)
   }
 
   const signOut = () => {
     localStorage.removeItem('otimiza-crm-session')
     setSession(null); setAccount(null); setMetrics(undefined); setLeads(initialLeads); setSales([]); setConversations([]); setNotifications([]); setSelectedLead(null); setShowOnboarding(false)
+    navigate('/entrar', true)
   }
 
   const addLead = () => {
@@ -697,8 +853,11 @@ export default function App() {
     return <ReportsPage session={session!}/>
   }
 
-  if (!session) return <AccessPage onAuthenticated={authenticateSession}/>
-  if (account?.access_state === 'expired') return <TrialExpired onSignOut={signOut}/>
+  const selection = selectionFromLocation()
+  if (!session && route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
+  if (!session) return <AccessPage initialMode={route === 'signup' ? 'register' : 'login'} selection={selection} onAuthenticated={authenticateSession} onNavigate={navigate}/>
+  if (route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
+  if (account?.access_state === 'expired') return <TrialExpired onSignOut={signOut} account={account} salesWhatsapp={salesWhatsapp}/>
   if (!account) return <main className="workspace-loading"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI"/></div><p>{syncError || 'Carregando o espaço da sua empresa...'}</p>{syncError && <button className="session-button" type="button" onClick={signOut}>Voltar ao acesso</button>}</main>
 
   return (

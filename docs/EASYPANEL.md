@@ -30,6 +30,7 @@ Crie um serviço a partir deste repositório do GitHub usando o `Dockerfile` da 
 | `EVOLUTION_API_URL` | URL interna ou HTTPS da Evolution instalada na VPS |
 | `EVOLUTION_API_KEY` | chave global da Evolution, guardada somente no serviço CRM |
 | `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` quando o domínio estiver ativo |
+| `SALES_WHATSAPP` | Número comercial com DDI e DDD, somente dígitos, usado pelos botões de contato da landing |
 
 O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. Quando o subdomínio estiver apontado, associe `crm.SEUDOMINIO.com` ao serviço com HTTPS ativo.
 

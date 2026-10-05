@@ -15,6 +15,7 @@ import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionQr, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
 import { pickText } from './message-text.js'
+import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
 
 type Token = { userId: string; companyId: string; role: string }
 type CompanyRow = { company_id: string; role: string; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null }
@@ -97,7 +98,11 @@ const registerSchema = z.object({
   segment: z.string().max(80).optional(),
   objective: z.string().max(160).optional(),
   usesOtimizaAutomation: z.boolean().optional(),
+  plan: z.enum(['crm', 'chatbot']).default('crm'),
+  channelLimit: z.coerce.number().int().min(1).max(5).default(1),
 })
+
+app.get('/api/public/config', async () => ({ salesWhatsapp: config.salesWhatsapp }))
 
 app.get('/health', async () => {
   await query('SELECT 1')
@@ -108,6 +113,8 @@ app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 h
   const parsed = registerSchema.safeParse(request.body)
   if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados do cadastro.', details: parsed.error.flatten().fieldErrors })
   const input = parsed.data
+  const planPriceCents = calculatePlanPrice(input.plan, input.channelLimit)
+  if (!isPurchasablePlan(input.plan)) return reply.code(400).send({ error: 'Plano inválido.' })
   const passwordHash = await bcrypt.hash(input.password, 12)
   const companyBaseSlug = slugify(input.companyName) || 'empresa'
   try {
@@ -115,10 +122,10 @@ app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 h
       const existing = await client.query('SELECT id FROM users WHERE email = $1', [input.email])
       if (existing.rowCount) throw new Error('EMAIL_EXISTS')
       const company = await client.query<{ id: string }>(
-        `INSERT INTO companies (name, slug, trial_ends_at, billing_status, onboarding)
-         VALUES ($1, $2 || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6), now() + interval '7 days', 'trial', $3::jsonb)
+        `INSERT INTO companies (name, slug, plan, channel_limit, plan_price_cents, trial_ends_at, billing_status, onboarding)
+         VALUES ($1, $2 || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6), $3, $4, $5, now() + interval '7 days', 'trial', $6::jsonb)
          RETURNING id`,
-        [input.companyName, companyBaseSlug, JSON.stringify({ segment: input.segment, objective: input.objective, usesOtimizaAutomation: input.usesOtimizaAutomation ?? false })],
+        [input.companyName, companyBaseSlug, input.plan, input.channelLimit, planPriceCents, JSON.stringify({ segment: input.segment, objective: input.objective, usesOtimizaAutomation: input.usesOtimizaAutomation ?? false, selectedPlan: input.plan, selectedChannelLimit: input.channelLimit, presentedPriceCents: planPriceCents })],
       )
       const user = await client.query<{ id: string }>('INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id', [input.name, input.email, passwordHash])
       await client.query('INSERT INTO memberships (company_id, user_id, role) VALUES ($1, $2, $3)', [company.rows[0].id, user.rows[0].id, 'owner'])
@@ -147,8 +154,8 @@ app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 mi
 app.get('/api/me', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply, true)
   if (!scope) return
-  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null; billing_status: string; uses_automation: boolean }>(
-    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.trial_ends_at, c.billing_status,
+  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: string; uses_automation: boolean }>(
+    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.channel_limit, c.plan_price_cents, c.trial_ends_at, c.billing_status,
        COALESCE((c.onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
      FROM users u JOIN companies c ON c.id = $1 WHERE u.id = $2`, [scope.companyId, scope.userId],
   )
@@ -548,19 +555,30 @@ app.post('/api/integrations/whatsapp', { preHandler: authenticate }, async (requ
       return reply.code(403).send({ error: 'A instância UAZAPI é configurada pelo cliente somente no plano Chatbot. Para Automação, a configuração é feita pela equipe Otimiza AI.' })
     }
   }
-  const result = await transaction(async (client) => {
-    const pipeline = await client.query<{ id: string }>('SELECT id FROM pipelines WHERE company_id = $1 AND is_default = true LIMIT 1', [scope.companyId])
-    const channel = await client.query<{ id: string }>(
-      `INSERT INTO whatsapp_channels (company_id, pipeline_id, name, phone_number, status)
-       VALUES ($1, $2, $3, $4, 'pending') RETURNING id`, [scope.companyId, pipeline.rows[0]?.id ?? null, input.channelName, input.phoneNumber ?? null],
-    )
-    const connection = await client.query<{ id: string; webhook_secret: string }>(
-      `INSERT INTO whatsapp_connections (channel_id, provider, phone_number_id, external_account_id, access_token_encrypted, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, webhook_secret`,
-      [channel.rows[0].id, input.provider, input.phoneNumberId ?? null, input.externalAccountId ?? null, input.accessToken ? encryptSecret(input.accessToken) : null, JSON.stringify({ serverUrl: input.serverUrl?.replace(/\/$/, '') ?? null })],
-    )
-    return { channelId: channel.rows[0].id, connectionId: connection.rows[0].id, webhookSecret: connection.rows[0].webhook_secret }
-  })
+  let result: { channelId: string; connectionId: string; webhookSecret: string }
+  try {
+    result = await transaction(async (client) => {
+      const company = await client.query<{ channel_limit: number }>('SELECT channel_limit FROM companies WHERE id = $1 FOR UPDATE', [scope.companyId])
+      const channelLimit = company.rows[0]?.channel_limit ?? 1
+      const count = await client.query<{ total: string }>('SELECT count(*)::text AS total FROM whatsapp_channels WHERE company_id = $1', [scope.companyId])
+      if (Number(count.rows[0]?.total ?? 0) >= channelLimit) throw new Error('CHANNEL_LIMIT')
+      const pipeline = await client.query<{ id: string }>('SELECT id FROM pipelines WHERE company_id = $1 AND is_default = true LIMIT 1', [scope.companyId])
+      const channel = await client.query<{ id: string }>(
+        `INSERT INTO whatsapp_channels (company_id, pipeline_id, name, phone_number, status)
+         VALUES ($1, $2, $3, $4, 'pending') RETURNING id`, [scope.companyId, pipeline.rows[0]?.id ?? null, input.channelName, input.phoneNumber ?? null],
+      )
+      const connection = await client.query<{ id: string; webhook_secret: string }>(
+        `INSERT INTO whatsapp_connections (channel_id, provider, phone_number_id, external_account_id, access_token_encrypted, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, webhook_secret`,
+        [channel.rows[0].id, input.provider, input.phoneNumberId ?? null, input.externalAccountId ?? null, input.accessToken ? encryptSecret(input.accessToken) : null, JSON.stringify({ serverUrl: input.serverUrl?.replace(/\/$/, '') ?? null })],
+      )
+      return { channelId: channel.rows[0].id, connectionId: connection.rows[0].id, webhookSecret: connection.rows[0].webhook_secret }
+    })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'CHANNEL_LIMIT') return reply.code(409).send({ error: 'Seu plano já atingiu o limite de números de WhatsApp.' })
+    if (typeof error === 'object' && error && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'Já existe um canal com esse nome.' })
+    throw error
+  }
   const webhookPath = input.provider === 'uazapi' ? `/webhooks/uazapi/${result.connectionId}` : '/webhooks/meta'
   let webhookConfigured: boolean | undefined
   let setupError: string | undefined
@@ -629,8 +647,8 @@ app.post('/api/integrations/evolution', { preHandler: authenticate, config: { ra
   let created: { channelId: string; connectionId: string }
   try {
     created = await transaction(async (client) => {
-      const company = await client.query<{ plan: string }>('SELECT plan FROM companies WHERE id = $1 FOR UPDATE', [scope.companyId])
-      const limit = company.rows[0]?.plan === 'essential' ? 1 : 3
+      const company = await client.query<{ channel_limit: number }>('SELECT channel_limit FROM companies WHERE id = $1 FOR UPDATE', [scope.companyId])
+      const limit = company.rows[0]?.channel_limit ?? 1
       const count = await client.query<{ total: string }>('SELECT count(*)::text AS total FROM whatsapp_channels WHERE company_id = $1', [scope.companyId])
       if (Number(count.rows[0]?.total ?? 0) >= limit) throw new Error('CHANNEL_LIMIT')
       const channel = await client.query<{ id: string }>(
@@ -1129,7 +1147,12 @@ app.post('/webhooks/n8n/:companyId', async (request, reply) => {
   return reply.code(202).send({ received: true, eventId: inserted.rows[0].id })
 })
 
-app.get('/*', async (_request, reply) => reply.type('text/html; charset=utf-8').send(appShell))
+app.get('/*', async (request, reply) => {
+  const path = request.url.split('?')[0]
+  const privateRoute = ['/entrar', '/cadastro', '/app'].includes(path)
+  const shell = privateRoute ? appShell.replace('name=\"robots\" content=\"index,follow\"', 'name=\"robots\" content=\"noindex,nofollow\"') : appShell
+  return reply.type('text/html; charset=utf-8').send(shell)
+})
 
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error)

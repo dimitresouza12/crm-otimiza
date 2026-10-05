@@ -10,7 +10,8 @@
     "api:dev": "tsx watch server/index.ts",
     "api:start": "tsx server/index.ts",
     "db:migrate": "tsx server/migrate.ts",
-    "test:evolution": "node --import tsx --test server/evolution.test.ts server/message-text.test.ts"
+    "test:evolution": "node --import tsx --test server/evolution.test.ts server/message-text.test.ts",
+    "test:plans": "node --import tsx --test server/pricing.test.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

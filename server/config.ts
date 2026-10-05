@@ -14,5 +14,6 @@ export const config = {
   encryptionKey: () => required('APP_ENCRYPTION_KEY'),
   metaVerifyToken: process.env.META_VERIFY_TOKEN ?? '',
   crmPublicUrl: process.env.CRM_PUBLIC_URL?.replace(/\/$/, '') ?? '',
+  salesWhatsapp: (process.env.SALES_WHATSAPP ?? '').replace(/\D/g, ''),
   allowedOrigins: (process.env.ALLOW_ORIGINS ?? 'http://localhost:5173').split(',').map((item) => item.trim()),
 }

@@ -26,10 +26,10 @@ const request = async <T>(path: string, options: RequestInit = {}, session?: Ses
 }
 
 export const api = {
-  register: (input: { name: string; companyName: string; email: string; password: string; segment?: string; objective?: string; usesOtimizaAutomation?: boolean }) =>
+  register: (input: { name: string; companyName: string; email: string; password: string; segment?: string; objective?: string; usesOtimizaAutomation?: boolean; plan?: 'crm' | 'chatbot'; channelLimit?: number }) =>
     request<Session & { trialEndsAt: string }>('/api/auth/register', { method: 'POST', body: JSON.stringify(input) }),
   login: (email: string, password: string) => request<Session>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  me: (session: Session) => request<{ name: string; email: string; company_name: string; plan: string; trial_ends_at: string | null; billing_status: 'trial' | 'active' | 'expired'; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired' }>('/api/me', {}, session),
+  me: (session: Session) => request<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: 'trial' | 'active' | 'expired'; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired' }>('/api/me', {}, session),
   dashboard: (session: Session) => request<{ confirmed_revenue: string; confirmed_sales: string; open_leads: string; average_ticket: string; leads_this_month: string }>('/api/dashboard', {}, session),
   crm: (session: Session) => request<Array<{ id: string; name: string; opportunities: Array<{ id: string; title: string; contactName: string | null; phone: string | null; temperature: 'new' | 'warm' | 'hot'; value: string | null; source: string | null; lastActivityAt: string | null }> }>>('/api/crm', {}, session),
   leads: (session: Session) => request<Array<{ id: string; name: string | null; phone: string; source: string | null; last_seen_at: string; opportunity_id: string | null; title: string | null; temperature: 'new' | 'warm' | 'hot' | null; estimated_value: string | null; stage_id: string | null; stage_name: string | null }>>('/api/leads', {}, session),
