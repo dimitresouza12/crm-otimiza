@@ -246,12 +246,15 @@ function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead:
 }
 
 function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
+  const [areValuesVisible, setAreValuesVisible] = useState(true)
   const revenue = metrics?.confirmedRevenue ?? 0
   const confirmedSales = metrics?.confirmedSales ?? 0
   const openLeads = metrics?.openLeads ?? 0
   const averageTicket = metrics?.averageTicket ?? 0
   const leadsThisMonth = metrics?.leadsThisMonth ?? 0
   const attention = leads.filter((lead) => lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos').slice(0, 3)
+  const show = (value: string) => areValuesVisible ? value : '••••'
+  const showMoney = (value: number) => show(money(value))
   const sourceResults = Array.from(leads.reduce((accumulator, lead) => {
     const current = accumulator.get(lead.source) ?? { name: lead.source, revenue: 0, leads: 0 }
     current.leads += 1
@@ -265,18 +268,18 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
     <>
       <section className="page-head">
         <div><span className="eyebrow">VISÃO GERAL · SETEMBRO</span><h1>Seu atendimento está convertendo mais.</h1><p>Veja o que gerou receita e onde sua equipe pode agir agora.</p></div>
-        <button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button>
+        <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button></div>
       </section>
       <section className="metric-grid">
-        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}`} emphasis tone="revenue" />
-        <MetricCard title="Em negociação" value={`${openLeads} leads`} trend="Acompanhe no funil" tone="pipeline" />
-        <MetricCard title="Novos leads" value={String(leadsThisMonth)} trend="Entraram neste mês" tone="leads" />
-        <MetricCard title="Ticket médio" value={money(averageTicket)} trend="Receita confirmada" tone="ticket" />
+        <MetricCard title="Receita confirmada" value={showMoney(revenue)} trend={areValuesVisible ? `${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}` : 'Vendas confirmadas'} emphasis tone="revenue" />
+        <MetricCard title="Em negociação" value={areValuesVisible ? `${openLeads} leads` : '••••'} trend="Acompanhe no funil" tone="pipeline" />
+        <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram neste mês" tone="leads" />
+        <MetricCard title="Ticket médio" value={showMoney(averageTicket)} trend="Receita confirmada" tone="ticket" />
       </section>
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
           <div className="panel__header"><div><span className="eyebrow">RECEITA ATRIBUÍDA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button">Ver relatório <ArrowRight size={16} /></button></div>
-          <div className="chart-summary"><strong>{money(revenue)}</strong><span><TrendingUp size={15} /> Atualizado</span></div>
+          <div className="chart-summary"><strong>{showMoney(revenue)}</strong><span><TrendingUp size={15} /> Atualizado</span></div>
           <div className="chart" aria-label="Gráfico de faturamento crescente">
             <div className="chart__grid" />
             <svg viewBox="0 0 680 208" preserveAspectRatio="none" role="img">
@@ -289,7 +292,7 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
           <div className="chart-axis"><span>01 set.</span><span>08 set.</span><span>15 set.</span><span>22 set.</span><span>30 set.</span></div>
         </article>
         <article className="attention-panel panel">
-          <div className="panel__header"><div><span className="eyebrow">PRÓXIMA AÇÃO</span><h2>Não deixe esfriar</h2></div><span className="count-pill">{attention.length}</span></div>
+          <div className="panel__header"><div><span className="eyebrow">PRÓXIMA AÇÃO</span><h2>Não deixe esfriar</h2></div><span className="count-pill">{areValuesVisible ? attention.length : '••'}</span></div>
           {attention.map((lead) => <div className="attention-lead" key={lead.id}><Avatar initials={lead.initials} /><div><strong>{lead.name}</strong><p>{lead.lastMessage}</p></div><button type="button" aria-label={`Abrir ${lead.name}`} onClick={() => onNavigate('crm')}><ChevronRight size={19} /></button></div>)}
           {!attention.length && <div className="dashboard-empty">Conecte seu WhatsApp ou crie um lead para acompanhar as próximas ações.</div>}
           <button className="wide-secondary" type="button" onClick={() => onNavigate('conversas')}>Abrir conversas pendentes <ArrowRight size={16} /></button>
@@ -298,7 +301,7 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
       <section className="source-section panel">
         <div className="panel__header"><div><span className="eyebrow">ORIGEM DOS RESULTADOS</span><h2>O que trouxe as vendas deste mês</h2></div><button className="text-button" type="button" onClick={() => onNavigate('trafego')}>Analisar tráfego <ArrowRight size={16} /></button></div>
         <div className="source-rows">
-          {sourceResults.length ? sourceResults.map((source, index) => { const percent = revenue ? Math.round((source.revenue / revenue) * 100) : Math.round((source.leads / Math.max(leads.length, 1)) * 100); const types = ['meta', 'google', 'referral', 'organic']; return <div className="source-row" key={source.name}><span className={`source-dot source-dot--${types[index % types.length]}`} /><strong>{source.name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{money(source.revenue)}</b><small>{percent}%</small></div> }) : <div className="dashboard-empty">As origens aparecerão quando entrarem os primeiros leads.</div>}
+          {sourceResults.length ? sourceResults.map((source, index) => { const percent = revenue ? Math.round((source.revenue / revenue) * 100) : Math.round((source.leads / Math.max(leads.length, 1)) * 100); const types = ['meta', 'google', 'referral', 'organic']; return <div className="source-row" key={source.name}><span className={`source-dot source-dot--${types[index % types.length]}`} /><strong>{source.name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{showMoney(source.revenue)}</b><small>{show(`${percent}%`)}</small></div> }) : <div className="dashboard-empty">As origens aparecerão quando entrarem os primeiros leads.</div>}
         </div>
       </section>
     </>
