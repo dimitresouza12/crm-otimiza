@@ -731,6 +731,7 @@ export default function App() {
     const [dashboard, crm, salesResult, conversationsResult, notificationsResult] = await Promise.all([api.dashboard(activeSession), api.crm(activeSession), api.sales(activeSession), api.conversations(activeSession), api.notifications(activeSession)])
     const digitsOnly = (value: string) => value.replace(/\D/g, '')
     const lastByPhone = new Map(conversationsResult.map((conversation) => [digitsOnly(conversation.phone), conversation]))
+    const lastByContact = new Map(conversationsResult.filter((conversation) => conversation.contact_name).map((conversation) => [conversation.contact_name!.trim().toLocaleLowerCase('pt-BR'), conversation]))
     const previewFor = (conversation?: (typeof conversationsResult)[number]) => {
       if (!conversation) return 'Sem mensagens sincronizadas ainda.'
       const kind = (conversation.last_type ?? '').toLowerCase()
@@ -750,7 +751,10 @@ export default function App() {
       source: (opportunity.source as Lead['source']) || 'Orgânico',
       value: opportunity.value === null ? undefined : Number(opportunity.value),
       time: opportunity.lastActivityAt ? new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round((new Date(opportunity.lastActivityAt).getTime() - Date.now()) / 3_600_000), 'hour') : 'agora',
-      lastMessage: previewFor(opportunity.phone ? lastByPhone.get(digitsOnly(opportunity.phone)) : undefined),
+      lastMessage: previewFor(
+        (opportunity.phone ? lastByPhone.get(digitsOnly(opportunity.phone)) : undefined)
+        ?? (opportunity.contactName ? lastByContact.get(opportunity.contactName.trim().toLocaleLowerCase('pt-BR')) : undefined),
+      ),
       temperature: temperatureLabel[opportunity.temperature] ?? 'Novo',
       owner: me.name,
       avatar: initialsFor(me.name),
