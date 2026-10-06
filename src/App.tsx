@@ -196,6 +196,8 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?:
   { id: 'relatorios', label: 'Relatórios', icon: BarChart3 },
 ]
 
+const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot', icon: Bot }
+
 function MetricCard({ title, value, trend, emphasis }: { title: string; value: string; trend: string; emphasis?: boolean }) {
   return (
     <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''}`}>
@@ -885,6 +887,9 @@ export default function App() {
   }
 
   const selection = selectionFromLocation()
+  const workspaceNavItems = account?.plan === 'chatbot'
+    ? [...navItems.slice(0, 4), chatbotNavItem, ...navItems.slice(4)]
+    : navItems
   if (!session && route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
   if (!session) return <AccessPage initialMode={route === 'signup' ? 'register' : 'login'} selection={selection} onAuthenticated={authenticateSession} onNavigate={navigate}/>
   if (route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
@@ -896,10 +901,10 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account.company_name)}</span><span><b>{account.company_name}</b><small>{account.access_state === 'trial' ? 'Teste gratuito' : `Plano ${account.plan}`}</small></span><ChevronDown size={16}/></button>
-        <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
+        <nav className="navigation" aria-label="Navegação principal">{workspaceNavItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
       {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
