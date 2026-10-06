@@ -662,7 +662,7 @@ app.get('/api/reports', { preHandler: authenticate }, async (request, reply) => 
   const end = parsed.data.end ?? new Date().toISOString().slice(0, 10)
   const start = parsed.data.start ?? `${end.slice(0, 8)}01`
   if (end < start) return reply.code(400).send({ error: 'O fim do período deve ser posterior ao início.' })
-  const [totals, sources, pipeline] = await Promise.all([
+  const [totals, sources, timeline, pipeline] = await Promise.all([
     query<{ revenue: string; sales: string; leads: string; ticket: string }>(
       `SELECT COALESCE((SELECT sum(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= $2::date AND confirmed_at < $3::date + 1), 0)::text AS revenue,
        (SELECT count(*) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= $2::date AND confirmed_at < $3::date + 1)::text AS sales,
@@ -686,13 +686,22 @@ app.get('/api/reports', { preHandler: authenticate }, async (request, reply) => 
       [scope.companyId, start, end],
     ),
     query(
+      `SELECT day::date::text AS date,
+        COALESCE((SELECT sum(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= day::date AND confirmed_at < day::date + 1), 0)::text AS revenue,
+        (SELECT count(*) FROM sales WHERE company_id = $1 AND status = 'confirmed' AND confirmed_at >= day::date AND confirmed_at < day::date + 1)::text AS sales,
+        (SELECT count(*) FROM opportunities WHERE company_id = $1 AND created_at >= day::date AND created_at < day::date + 1)::text AS leads
+       FROM generate_series($2::date, $3::date, interval '1 day') AS days(day)
+       ORDER BY day`,
+      [scope.companyId, start, end],
+    ),
+    query(
       `SELECT ps.name, ps.kind, count(o.id)::text AS total FROM pipeline_stages ps JOIN pipelines p ON p.id = ps.pipeline_id
        LEFT JOIN opportunities o ON o.stage_id = ps.id AND o.company_id = $1
        WHERE p.company_id = $1 AND p.is_default = true GROUP BY ps.id ORDER BY ps.position`,
       [scope.companyId],
     ),
   ])
-  return { period: { start, end }, totals: totals.rows[0], sources: sources.rows, pipeline: pipeline.rows }
+  return { period: { start, end }, totals: totals.rows[0], sources: sources.rows, timeline: timeline.rows, pipeline: pipeline.rows }
 })
 
 app.get('/api/notifications', { preHandler: authenticate }, async (request, reply) => {
