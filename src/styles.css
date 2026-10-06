@@ -372,3 +372,9 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .chat-close:hover { color: var(--ink); background: #f0eeff; }
 .chat-bot-chip + .chat-close { margin-left: 4px; }
 .chat-thread__head > .chat-close:last-child:not(.chat-bot-chip + .chat-close) { margin-left: auto; }
+
+.chat-transcript { margin: 4px 0 0; padding: 6px 8px; color: var(--ink); border-radius: 8px; background: rgba(255, 255, 255, .6); font-size: 12px; line-height: 1.4; }
+.chat-transcript b { display: block; margin-bottom: 2px; color: var(--muted); font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.ai-history { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ai-history li { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #fbfbfe; }
+.ai-history b { color: var(--ink); font-size: 12px; font-weight: 600; }.ai-history p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }.ai-history small { color: var(--muted); font-size: 10px; }

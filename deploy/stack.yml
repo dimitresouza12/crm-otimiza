@@ -30,6 +30,9 @@ services:
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       SALES_WHATSAPP: ${SALES_WHATSAPP:-}
       UPLOADS_DIR: /data/uploads
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_ANALYSIS_MODEL: ${OPENAI_ANALYSIS_MODEL:-}
+      OPENAI_TRANSCRIBE_MODEL: ${OPENAI_TRANSCRIBE_MODEL:-}
     volumes:
       - otimiza_crm_uploads:/data/uploads
     networks: [otimiza_crm_internal, easypanel]

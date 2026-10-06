@@ -31,8 +31,24 @@ Crie um serviço a partir deste repositório do GitHub usando o `Dockerfile` da 
 | `EVOLUTION_API_KEY` | chave global da Evolution, guardada somente no serviço CRM |
 | `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` quando o domínio estiver ativo |
 | `SALES_WHATSAPP` | Número comercial com DDI e DDD, somente dígitos, usado pelos botões de contato da landing |
+| `UPLOADS_DIR` | Pasta das fotos e áudios do chat. Em produção use `/data/uploads` com volume persistente (já previsto em `deploy/stack.yml`) |
+| `OPENAI_API_KEY` | Opcional. Chave da OpenAI para transcrever áudios e analisar leads no plano Chatbot. Sem ela, o recurso fica indisponível |
+| `OPENAI_ANALYSIS_MODEL` | Opcional. Modelo da análise das conversas. Padrão `gpt-4.1-mini` |
+| `OPENAI_TRANSCRIBE_MODEL` | Opcional. Modelo de transcrição de áudio. Padrão `gpt-4o-mini-transcribe` |
 
 O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. Quando o subdomínio estiver apontado, associe `crm.SEUDOMINIO.com` ao serviço com HTTPS ativo.
+
+### IA (opcional, plano Chatbot)
+
+Com `OPENAI_API_KEY` definida, cada empresa do plano Chatbot pode ligar **Inteligência artificial (GPT)** em *Chatbot → Configuração*. Com a opção ligada:
+
+- áudios recebidos são transcritos e a transcrição alimenta as regras do chatbot;
+- cerca de 20 segundos depois da última mensagem, o GPT lê a conversa e atualiza etapa (só avança), temperatura, valor e origem do lead;
+- venda confirmada pelo cliente vira venda **detectada** (em revisão), nunca faturamento confirmado; desistência move o lead para Perdidos;
+- leads movidos manualmente ficam protegidos da IA por 12 horas;
+- cada decisão fica em *Por que mudou?* no detalhe do lead.
+
+O texto das conversas é enviado à OpenAI. Informe isso aos clientes finais (LGPD). Custo por uso, cobrado pela OpenAI.
 
 ## 3. Evolution, UAZAPI e n8n
 

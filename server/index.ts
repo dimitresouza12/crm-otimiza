@@ -16,6 +16,8 @@ import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
 import { foldText, pickText } from './message-text.js'
+import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
+import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
 
 type Token = { userId: string; companyId: string; role: string }
@@ -293,7 +295,7 @@ app.patch('/api/opportunities/:opportunityId', { preHandler: authenticate }, asy
   const nextStage = parsed.data.stageId ? await getStage(scope.companyId, parsed.data.stageId) : null
   if (nextStage && nextStage.pipeline_id !== current.rows[0].pipeline_id) return reply.code(400).send({ error: 'A etapa selecionada pertence a outro funil.' })
   const { rows } = await query(
-    `UPDATE opportunities SET stage_id = COALESCE($3, stage_id), estimated_value = COALESCE($4, estimated_value),
+    `UPDATE opportunities SET stage_locked_until = now() + interval '12 hours', stage_id = COALESCE($3, stage_id), estimated_value = COALESCE($4, estimated_value),
        temperature = COALESCE($5, temperature), title = COALESCE($6, title), last_activity_at = now(), updated_at = now()
      WHERE id = $1 AND company_id = $2 RETURNING id, stage_id, estimated_value, temperature, title`,
     [params.data.opportunityId, scope.companyId, nextStage?.id ?? null, parsed.data.estimatedValue ?? null, parsed.data.temperature ?? null, parsed.data.title ?? null],
@@ -351,7 +353,7 @@ app.get('/api/conversations/:conversationId/messages', { preHandler: authenticat
   const conversation = await query<{ id: string; bot_paused: boolean }>(`SELECT id, (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS bot_paused FROM conversations WHERE id = $1 AND company_id = $2`, [params.data.conversationId, scope.companyId])
   if (!conversation.rows[0]) return reply.code(404).send({ error: 'Conversa não encontrada.' })
   const { rows } = await query(
-    `SELECT id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, (media_path IS NOT NULL) AS has_media FROM (
+    `SELECT id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media FROM (
        SELECT * FROM messages WHERE company_id = $1 AND conversation_id = $2 ORDER BY sent_at DESC LIMIT 300
      ) recent ORDER BY sent_at ASC`, [scope.companyId, params.data.conversationId],
   )
@@ -376,10 +378,11 @@ const storeAgentMessage = async (target: { company_id: string; conversation_id: 
     `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by, media_path, media_mime, media_name)
      VALUES ($1, $2, $3, 'outbound', $4, $5, now(), '{"source":"agent"}'::jsonb, 'agent', $6, $7, $8)
      ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'agent', message_type = EXCLUDED.message_type, body = COALESCE(EXCLUDED.body, messages.body), media_path = EXCLUDED.media_path, media_mime = EXCLUDED.media_mime, media_name = EXCLUDED.media_name
-     RETURNING id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, (media_path IS NOT NULL) AS has_media`,
+     RETURNING id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media`,
     [target.company_id, target.conversation_id, externalId, input.type, input.body, input.mediaPath ?? null, input.mediaMime ?? null, input.mediaName ?? null],
   )
   await query(`UPDATE conversations SET last_message_at = now(), bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [target.conversation_id])
+  scheduleAnalysis(target.conversation_id, (error) => app.log.error({ error }, 'Falha na análise por IA'))
   return rows[0]
 }
 
@@ -468,6 +471,17 @@ app.get('/api/messages/:messageId/media', { preHandler: authenticate }, async (r
     .header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(media.media_name ?? 'arquivo')}`)
     .header('Cache-Control', 'private, max-age=3600')
     .send(createReadStream(fullPath))
+})
+
+app.get('/api/opportunities/:opportunityId/ai', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const params = z.object({ opportunityId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Oportunidade inválida.' })
+  const opportunity = await query<{ ai_summary: string | null; ai_summary_at: string | null }>('SELECT ai_summary, ai_summary_at FROM opportunities WHERE id = $1 AND company_id = $2', [params.data.opportunityId, scope.companyId])
+  if (!opportunity.rows[0]) return reply.code(404).send({ error: 'Lead não encontrado.' })
+  const events = await query('SELECT id, reason, confidence, applied, created_at FROM opportunity_ai_events WHERE opportunity_id = $1 AND company_id = $2 ORDER BY created_at DESC LIMIT 10', [params.data.opportunityId, scope.companyId])
+  return { summary: opportunity.rows[0].ai_summary, summaryAt: opportunity.rows[0].ai_summary_at, events: events.rows }
 })
 
 app.post('/api/sales', { preHandler: authenticate }, async (request, reply) => {
@@ -891,14 +905,14 @@ app.get('/api/chatbot', { preHandler: authenticate }, async (request, reply) => 
   const scope = await chatbotScope(request, reply)
   if (!scope) return
   const [settings, channels, rules] = await Promise.all([
-    query<{ is_active: boolean; welcome_message: string | null; fallback_message: string | null }>('SELECT is_active, welcome_message, fallback_message FROM chatbot_settings WHERE company_id = $1', [scope.companyId]),
+    query<{ is_active: boolean; welcome_message: string | null; fallback_message: string | null; ai_enabled: boolean }>('SELECT is_active, welcome_message, fallback_message, ai_enabled FROM chatbot_settings WHERE company_id = $1', [scope.companyId]),
     query<{ id: string; name: string; phone_number: string | null; status: string; provider: string }>(`SELECT c.id, c.name, c.phone_number, c.status, wc.provider FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.company_id = $1 AND wc.provider IN ('uazapi', 'evolution') ORDER BY c.created_at DESC`, [scope.companyId]),
     query<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }>('SELECT id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position FROM chatbot_rules WHERE company_id = $1 ORDER BY position, created_at', [scope.companyId]),
   ])
-  return { settings: settings.rows[0] ?? { is_active: false, welcome_message: '', fallback_message: '' }, channels: channels.rows, rules: rules.rows }
+  return { settings: settings.rows[0] ?? { is_active: false, welcome_message: '', fallback_message: '', ai_enabled: false }, aiAvailable: openaiConfigured(), channels: channels.rows, rules: rules.rows }
 })
 
-const chatbotSettingsSchema = z.object({ isActive: z.boolean(), welcomeMessage: z.string().max(2000).optional(), fallbackMessage: z.string().max(2000).optional() })
+const chatbotSettingsSchema = z.object({ isActive: z.boolean(), welcomeMessage: z.string().max(2000).optional(), fallbackMessage: z.string().max(2000).optional(), aiEnabled: z.boolean().optional() })
 app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, reply) => {
   const scope = await chatbotScope(request, reply)
   if (!scope) return
@@ -906,10 +920,10 @@ app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, r
   if (!parsed.success) return reply.code(400).send({ error: 'Configuração do chatbot inválida.' })
   const input = parsed.data
   const { rows } = await query(
-    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, updated_at = now()
-     RETURNING is_active, welcome_message, fallback_message`, [scope.companyId, input.isActive, input.welcomeMessage ?? null, input.fallbackMessage ?? null],
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, ai_enabled)
+     VALUES ($1, $2, $3, $4, COALESCE($5, false))
+     ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, ai_enabled = COALESCE($5, chatbot_settings.ai_enabled), updated_at = now()
+     RETURNING is_active, welcome_message, fallback_message, ai_enabled`, [scope.companyId, input.isActive, input.welcomeMessage ?? null, input.fallbackMessage ?? null, input.aiEnabled ?? null],
   )
   return rows[0]
 })
@@ -1036,10 +1050,10 @@ const BOT_PAUSE_AFTER_HUMAN = `now() + interval '12 hours'`
 type EvolutionConnection = { id: string; company_id: string; channel_id: string; provider: string; external_account_id: string | null; access_token_encrypted: string | null }
 
 const attachInboundMedia = async (connection: EvolutionConnection, incoming: { messageId: string | null; externalId: string; messageType: string; data: Record<string, unknown> }) => {
-  if (!incoming.messageId) return
+  if (!incoming.messageId) return null
   const message = record(incoming.data.message)
   const kind = mediaKinds[incoming.messageType] ?? mediaKinds[Object.keys(message)[0] ?? '']
-  if (!kind) return
+  if (!kind) return null
   const inner = record(message[Object.keys(message).find((key) => key in mediaKinds) ?? ''])
   let base64 = typeof message.base64 === 'string' ? message.base64 : typeof incoming.data.base64 === 'string' ? incoming.data.base64 : null
   let mimeType = typeof inner.mimetype === 'string' ? inner.mimetype : null
@@ -1048,10 +1062,15 @@ const attachInboundMedia = async (connection: EvolutionConnection, incoming: { m
     const fetched = await evolutionMediaBase64(connection.external_account_id, decryptSecret(connection.access_token_encrypted), incoming.externalId)
     if (fetched) { base64 = fetched.base64; mimeType = fetched.mimetype ?? mimeType; fileName = fetched.fileName ?? fileName }
   }
-  if (!base64) return
+  if (!base64) return null
   const mime = (mimeType ?? (kind === 'image' ? 'image/jpeg' : kind === 'audio' ? 'audio/ogg' : kind === 'video' ? 'video/mp4' : 'application/octet-stream')).trim()
   const path = await saveMediaFile(connection.company_id, base64.replace(/^data:[^;]+;base64,/, ''), mime, fileName)
   await query('UPDATE messages SET media_path = $2, media_mime = $3, media_name = $4, message_type = $5 WHERE id = $1', [incoming.messageId, path, mime, fileName, kind])
+  if (kind !== 'audio' || !(await aiEnabledFor(connection.company_id))) return null
+  const transcript = await transcribeAudio(Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64'), mime, fileName ?? 'audio.ogg').catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao transcrever áudio'); return null })
+  if (!transcript) return null
+  await query('UPDATE messages SET transcript = $2 WHERE id = $1', [incoming.messageId, transcript])
+  return transcript
 }
 
 const handleHumanOnPhone = async (incoming: { messageId: string | null; externalId: string; conversationId: string }) => {
@@ -1103,6 +1122,7 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
      ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'bot', raw_payload = EXCLUDED.raw_payload`,
     [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
   )
+  scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA'))
 }
 
 const metaSignatureValid = (request: FastifyRequest) => {
@@ -1235,11 +1255,17 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
     if (event === 'messagesupsert') {
       const incoming = await saveWhatsAppMessage(connection, payload)
       if (incoming && incoming.isNew) {
-        void attachInboundMedia(connection, incoming).catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'))
+        const messageKeys = Object.keys(record(incoming.data.message))
+        const isAudio = (mediaKinds[incoming.messageType] ?? mediaKinds[messageKeys.find((key) => key in mediaKinds) ?? '']) === 'audio'
+        const media = attachInboundMedia(connection, incoming).catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'); return null })
         if (!incoming.inbound) void handleHumanOnPhone(incoming).catch((error) => app.log.error({ error }, 'Falha ao pausar o chatbot'))
-      }
-      if (incoming && incoming.inbound && incoming.isNew) {
-        void sendChatbotResponse(connection, incoming).catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
+        if (incoming.inbound) {
+          void (async () => {
+            const body = incoming.body ?? (isAudio ? await media : null)
+            await sendChatbotResponse(connection, { ...incoming, body })
+          })().catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
+        }
+        void media.finally(() => scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA')))
       }
     } else if (event === 'connectionupdate') {
       const state = String(data.state ?? data.status ?? '').toLowerCase()

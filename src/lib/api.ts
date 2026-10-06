@@ -9,23 +9,40 @@ export type Session = {
 type ApiError = { error?: string }
 
 export type ChatSender = 'customer' | 'bot' | 'agent' | 'phone' | null
-export type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; message_type: string; body: string | null; sent_at: string; sent_by: ChatSender; media_mime: string | null; media_name: string | null; has_media: boolean }
+export type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; message_type: string; body: string | null; sent_at: string; sent_by: ChatSender; media_mime: string | null; media_name: string | null; transcript?: string | null; has_media: boolean }
 
+const unavailableMessage = 'O servidor está indisponível no momento. Tente novamente em instantes.'
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+// Durante uma atualização a API fica fora do ar por alguns segundos e o proxy responde HTML ou 502.
+// Leituras (GET) tentam de novo sozinhas; escritas nunca repetem, para não duplicar nada.
 const request = async <T>(path: string, options: RequestInit = {}, session?: Session): Promise<T> => {
-  const response = await fetch(`${configuredBaseUrl}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(session ? { Authorization: `Bearer ${session.token}`, 'X-Company-Id': session.companyId } : {}),
-      ...options.headers,
-    },
-  })
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as ApiError
-    throw new Error(body.error ?? 'Não foi possível concluir esta operação.')
+  const attempts = (options.method ?? 'GET').toUpperCase() === 'GET' ? 4 : 1
+  for (let attempt = 1; ; attempt++) {
+    let response: Response | null = null
+    try {
+      response = await fetch(`${configuredBaseUrl}${path}`, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { Authorization: `Bearer ${session.token}`, 'X-Company-Id': session.companyId } : {}),
+          ...options.headers,
+        },
+      })
+    } catch { response = null }
+    const isJson = response?.headers.get('content-type')?.includes('json') ?? false
+    const unavailable = !response || [502, 503, 504].includes(response.status) || (response.status !== 204 && !isJson)
+    if (unavailable) {
+      if (attempt < attempts) { await sleep(700 * attempt); continue }
+      throw new Error(unavailableMessage)
+    }
+    if (!response!.ok) {
+      const body = await response!.json().catch(() => ({})) as ApiError
+      throw new Error(body.error ?? 'Não foi possível concluir esta operação.')
+    }
+    if (response!.status === 204) return undefined as T
+    return response!.json() as Promise<T>
   }
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
 }
 
 export const api = {
@@ -62,8 +79,9 @@ export const api = {
   createTraffic: (session: Session, input: { source: string; platform: string; periodStart: string; periodEnd: string; spend: number; reportedLeads: number; impressions?: number; clicks?: number }) => request('/api/traffic', { method: 'POST', body: JSON.stringify(input) }, session),
   reports: (session: Session, start?: string, end?: string) => request<{ period: { start: string; end: string }; totals: { revenue: string; sales: string; leads: string; ticket: string }; sources: Array<{ source: string; spend: string; leads: string; sales: string; revenue: string }>; pipeline: Array<{ name: string; kind: 'open' | 'won' | 'lost'; total: string }> }>(`/api/reports${start && end ? `?start=${start}&end=${end}` : ''}`, {}, session),
   notifications: (session: Session) => request<Array<{ id: string; type: 'channel' | 'lead' | 'trial'; title: string; body: string; action: string }>>('/api/notifications', {}, session),
-  chatbot: (session: Session) => request<{ settings: { is_active: boolean; welcome_message: string | null; fallback_message: string | null }; channels: Array<{ id: string; name: string; phone_number: string | null; status: string; provider: 'uazapi' | 'evolution' }>; rules: Array<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }> }>('/api/chatbot', {}, session),
-  saveChatbotSettings: (session: Session, input: { isActive: boolean; welcomeMessage?: string; fallbackMessage?: string }) => request('/api/chatbot/settings', { method: 'PUT', body: JSON.stringify(input) }, session),
+  chatbot: (session: Session) => request<{ settings: { is_active: boolean; welcome_message: string | null; fallback_message: string | null; ai_enabled: boolean }; aiAvailable: boolean; channels: Array<{ id: string; name: string; phone_number: string | null; status: string; provider: 'uazapi' | 'evolution' }>; rules: Array<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }> }>('/api/chatbot', {}, session),
+  saveChatbotSettings: (session: Session, input: { isActive: boolean; welcomeMessage?: string; fallbackMessage?: string; aiEnabled?: boolean }) => request('/api/chatbot/settings', { method: 'PUT', body: JSON.stringify(input) }, session),
   createChatbotRule: (session: Session, input: { channelId: string; name: string; triggerType: 'keyword' | 'first_message'; triggerValue?: string; responseText: string }) => request('/api/chatbot/rules', { method: 'POST', body: JSON.stringify(input) }, session),
+  opportunityAi: (session: Session, opportunityId: string) => request<{ summary: string | null; summaryAt: string | null; events: Array<{ id: string; reason: string | null; confidence: string | null; applied: Record<string, { from?: string | number | null; to?: string | number; amount?: number; status?: string }>; created_at: string }> }>(`/api/opportunities/${opportunityId}/ai`, {}, session),
   deleteChatbotRule: (session: Session, ruleId: string) => request(`/api/chatbot/rules/${ruleId}`, { method: 'DELETE' }, session),
 }

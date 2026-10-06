@@ -89,7 +89,7 @@ function MessageMedia({ session, message, kind, onOpenImage }: { session: Sessio
   if (failed) return <div className="chat-media-pending">Não foi possível carregar o arquivo.</div>
   if (!url) return <div className="chat-media-pending">Carregando…</div>
   if (kind === 'image' || kind === 'sticker') return <button className="chat-image" type="button" onClick={() => onOpenImage(url)} aria-label="Ampliar imagem"><img src={url} alt={message.body || 'Imagem da conversa'} /></button>
-  if (kind === 'audio') return <AudioPlayer src={url} />
+  if (kind === 'audio') return <><AudioPlayer src={url} />{message.transcript && <p className="chat-transcript"><b>Transcrição</b>{message.transcript}</p>}</>
   if (kind === 'video') return <video className="chat-video" src={url} controls preload="metadata" />
   return <a className="chat-file" href={url} download={message.media_name ?? 'arquivo'}><FileText size={20} /><span>{message.media_name ?? 'Arquivo'}</span><Download size={16} /></a>
 }
