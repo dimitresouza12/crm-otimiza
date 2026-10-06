@@ -675,13 +675,14 @@ app.get('/api/reports', { preHandler: authenticate }, async (request, reply) => 
          SELECT DISTINCT source FROM traffic_metrics WHERE company_id = $1 AND period_start <= $3::date AND period_end >= $2::date
          UNION
          SELECT DISTINCT COALESCE(source, 'Sem origem') FROM opportunities WHERE company_id = $1 AND created_at >= $2::date AND created_at < $3::date + 1
-       )
+       ), source_results AS (
        SELECT source,
          COALESCE((SELECT sum(spend) FROM traffic_metrics tm WHERE tm.company_id = $1 AND lower(tm.source) = lower(sources.source) AND tm.period_start <= $3::date AND tm.period_end >= $2::date), 0)::text AS spend,
          (SELECT count(*) FROM opportunities o WHERE o.company_id = $1 AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND o.created_at >= $2::date AND o.created_at < $3::date + 1)::text AS leads,
          (SELECT count(*) FROM sales sl JOIN opportunities o ON o.id = sl.opportunity_id WHERE sl.company_id = $1 AND sl.status = 'confirmed' AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND sl.confirmed_at >= $2::date AND sl.confirmed_at < $3::date + 1)::text AS sales,
          COALESCE((SELECT sum(sl.amount) FROM sales sl JOIN opportunities o ON o.id = sl.opportunity_id WHERE sl.company_id = $1 AND sl.status = 'confirmed' AND lower(COALESCE(o.source, 'Sem origem')) = lower(sources.source) AND sl.confirmed_at >= $2::date AND sl.confirmed_at < $3::date + 1), 0)::text AS revenue
-       FROM sources ORDER BY revenue::numeric DESC, leads::integer DESC`,
+       FROM sources)
+       SELECT * FROM source_results ORDER BY revenue::numeric DESC, leads::integer DESC`,
       [scope.companyId, start, end],
     ),
     query(
