@@ -198,9 +198,9 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?:
 
 const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot', icon: Bot }
 
-function MetricCard({ title, value, trend, emphasis }: { title: string; value: string; trend: string; emphasis?: boolean }) {
+function MetricCard({ title, value, trend, emphasis, tone }: { title: string; value: string; trend: string; emphasis?: boolean; tone?: 'revenue' | 'pipeline' | 'leads' | 'ticket' }) {
   return (
-    <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''}`}>
+    <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''} ${tone ? `metric-card--${tone}` : ''}`}>
       <div className="metric-card__top"><span>{title}</span><MoreHorizontal size={18} /></div>
       <strong>{value}</strong>
       <p><TrendingUp size={14} /> {trend} <span>vs. mês anterior</span></p>
@@ -268,10 +268,10 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
         <button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button>
       </section>
       <section className="metric-grid">
-        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}`} emphasis />
-        <MetricCard title="Em negociação" value={`${openLeads} leads`} trend="Acompanhe no funil" />
-        <MetricCard title="Novos leads" value={String(leadsThisMonth)} trend="Entraram neste mês" />
-        <MetricCard title="Ticket médio" value={money(averageTicket)} trend="Receita confirmada" />
+        <MetricCard title="Receita confirmada" value={money(revenue)} trend={`${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}`} emphasis tone="revenue" />
+        <MetricCard title="Em negociação" value={`${openLeads} leads`} trend="Acompanhe no funil" tone="pipeline" />
+        <MetricCard title="Novos leads" value={String(leadsThisMonth)} trend="Entraram neste mês" tone="leads" />
+        <MetricCard title="Ticket médio" value={money(averageTicket)} trend="Receita confirmada" tone="ticket" />
       </section>
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
