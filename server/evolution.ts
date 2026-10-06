@@ -79,3 +79,28 @@ export const evolutionQr = async (instanceName: string, instanceToken: string) =
 
 export const evolutionSendText = (instanceName: string, instanceToken: string, number: string, text: string) =>
   request(`/message/sendText/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, text })
+
+export const evolutionMessageId = (result: Json) => {
+  const id = object(result.key).id
+  return typeof id === 'string' && id ? id : null
+}
+
+export const evolutionSendMedia = (instanceName: string, instanceToken: string, number: string, media: { mediatype: 'image' | 'video' | 'document'; mimetype: string; base64: string; fileName: string; caption?: string }) =>
+  request(`/message/sendMedia/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', {
+    number,
+    mediatype: media.mediatype,
+    mimetype: media.mimetype,
+    media: media.base64,
+    fileName: media.fileName,
+    ...(media.caption ? { caption: media.caption } : {}),
+  })
+
+export const evolutionSendAudio = (instanceName: string, instanceToken: string, number: string, base64: string) =>
+  request(`/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, audio: base64, encoding: true })
+
+export const evolutionMediaBase64 = async (instanceName: string, instanceToken: string, messageId: string) => {
+  const result = await request(`/chat/getBase64FromMediaMessage/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { message: { key: { id: messageId } }, convertToMp4: false })
+  const base64 = typeof result.base64 === 'string' ? result.base64.replace(/^data:[^;]+;base64,/, '') : null
+  if (!base64) return null
+  return { base64, mimetype: typeof result.mimetype === 'string' ? result.mimetype : null, fileName: typeof result.fileName === 'string' ? result.fileName : null }
+}

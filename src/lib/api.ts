@@ -8,6 +8,9 @@ export type Session = {
 
 type ApiError = { error?: string }
 
+export type ChatSender = 'customer' | 'bot' | 'agent' | 'phone' | null
+export type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; message_type: string; body: string | null; sent_at: string; sent_by: ChatSender; media_mime: string | null; media_name: string | null; has_media: boolean }
+
 const request = async <T>(path: string, options: RequestInit = {}, session?: Session): Promise<T> => {
   const response = await fetch(`${configuredBaseUrl}${path}`, {
     ...options,
@@ -34,7 +37,16 @@ export const api = {
   crm: (session: Session) => request<Array<{ id: string; name: string; opportunities: Array<{ id: string; title: string; contactName: string | null; phone: string | null; temperature: 'new' | 'warm' | 'hot'; value: string | null; source: string | null; lastActivityAt: string | null }> }>>('/api/crm', {}, session),
   leads: (session: Session) => request<Array<{ id: string; name: string | null; phone: string; source: string | null; last_seen_at: string; opportunity_id: string | null; title: string | null; temperature: 'new' | 'warm' | 'hot' | null; estimated_value: string | null; stage_id: string | null; stage_name: string | null }>>('/api/leads', {}, session),
   sales: (session: Session) => request<Array<{ id: string; status: 'negotiation' | 'detected' | 'confirmed' | 'lost'; amount: string; confirmed_at: string | null; created_at: string; opportunity_id: string | null; contact_name: string | null; opportunity_title: string | null }>>('/api/sales', {}, session),
-  conversations: (session: Session) => request<Array<{ id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null }>>('/api/conversations', {}, session),
+  conversations: (session: Session) => request<Array<{ id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null; bot_paused?: boolean; last_type?: string | null; last_sent_by?: ChatSender }>>('/api/conversations', {}, session),
+  conversationMessages: (session: Session, conversationId: string) => request<{ botPaused: boolean; messages: ChatMessage[] }>(`/api/conversations/${conversationId}/messages`, {}, session),
+  sendChatText: (session: Session, conversationId: string, text: string) => request<ChatMessage>(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ text }) }, session),
+  sendChatMedia: (session: Session, conversationId: string, input: { kind: 'image' | 'audio' | 'document'; mimeType: string; fileName?: string; data: string; caption?: string }) => request<ChatMessage>(`/api/conversations/${conversationId}/media`, { method: 'POST', body: JSON.stringify(input) }, session),
+  setConversationBot: (session: Session, conversationId: string, paused: boolean) => request<{ botPaused: boolean }>(`/api/conversations/${conversationId}/bot`, { method: 'PUT', body: JSON.stringify({ paused }) }, session),
+  chatMedia: async (session: Session, messageId: string): Promise<Blob> => {
+    const response = await fetch(`${configuredBaseUrl}/api/messages/${messageId}/media`, { headers: { Authorization: `Bearer ${session.token}`, 'X-Company-Id': session.companyId } })
+    if (!response.ok) throw new Error('Não foi possível carregar o arquivo.')
+    return response.blob()
+  },
   whatsappConnections: (session: Session) => request<Array<{ id: string; name: string; phone_number: string | null; status: 'pending' | 'connected' | 'disconnected' | 'error'; provider: 'meta_cloud' | 'uazapi' | 'evolution' | null; phone_number_id: string | null; external_account_id: string | null; connected_at: string | null; last_event_at: string | null }>>('/api/integrations/whatsapp', {}, session),
   createEvolution: (session: Session, channelName: string) => request<{ channelId: string; connectionId: string; status: 'pending' | 'connected' | 'error'; setupError?: string }>('/api/integrations/evolution', { method: 'POST', body: JSON.stringify({ channelName }) }, session),
   evolutionStatus: (session: Session, channelId: string) => request<{ status: 'pending' | 'connected' | 'disconnected' | 'error' }>(`/api/integrations/evolution/${channelId}/status`, {}, session),

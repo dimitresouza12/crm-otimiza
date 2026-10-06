@@ -8,3 +8,5 @@ export const pickText = (value: unknown, depth = 0): string | null => {
   }
   return null
 }
+
+export const foldText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036F]/g, "").toLocaleLowerCase("pt-BR").replace(/\s+/g, " ").trim()

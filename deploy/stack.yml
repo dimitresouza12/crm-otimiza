@@ -25,6 +25,13 @@ services:
       META_APP_SECRET: ${META_APP_SECRET:-}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:?N8N_WEBHOOK_SECRET is required}
       ALLOW_ORIGINS: ${ALLOW_ORIGINS:-https://crm.example.com}
+      CRM_PUBLIC_URL: ${CRM_PUBLIC_URL:-}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      SALES_WHATSAPP: ${SALES_WHATSAPP:-}
+      UPLOADS_DIR: /data/uploads
+    volumes:
+      - otimiza_crm_uploads:/data/uploads
     networks: [otimiza_crm_internal, easypanel]
     deploy:
       replicas: 1
@@ -55,3 +62,4 @@ networks:
 
 volumes:
   otimiza_crm_postgres:
+  otimiza_crm_uploads:

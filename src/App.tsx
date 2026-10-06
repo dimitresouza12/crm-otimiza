@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import {
   Activity,
   ArrowRight,
@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import otimizaSymbol from './assets/otimiza-ai-symbol.png'
 import { api, type Session } from './lib/api'
+import { ChatDrawer, ChatPage } from './ChatPage'
 
 type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
@@ -44,6 +45,7 @@ type Lead = {
   id: number | string
   opportunityId?: string
   stageId?: string
+  phone?: string
   name: string
   initials: string
   stage: Stage
@@ -206,14 +208,14 @@ function Avatar({ initials, small = false }: { initials: string; small?: boolean
   return <span className={`avatar ${small ? 'avatar--small' : ''}`}>{initials}</span>
 }
 
-function LeadCard({ lead, onClick }: { lead: Lead; onClick: () => void }) {
+function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead: Lead; onClick: () => void; onOpenChat?: () => void; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void }) {
   return (
-    <button className="lead-card" onClick={onClick} type="button">
+    <button className="lead-card" onClick={onClick} type="button" draggable={Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="lead-card__top">
         <Avatar initials={lead.initials} />
         <span className={`temperature temperature--${lead.temperature.toLowerCase()}`}>{lead.temperature}</span>
       </div>
-      <div className="lead-card__name-row"><strong>{lead.name}</strong><MoreHorizontal size={17} /></div>
+      <div className="lead-card__name-row"><strong>{lead.name}</strong><span className="lead-card__actions">{onOpenChat && <span className="lead-card__chat" role="button" tabIndex={0} title="Abrir conversa" aria-label={`Abrir conversa com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><MessageCircleMore size={16} /></span>}<MoreHorizontal size={17} /></span></div>
       <p>{lead.lastMessage}</p>
       <div className="lead-card__tags"><span>{lead.source}</span><span>{lead.channel}</span></div>
       <div className="lead-card__footer">
@@ -284,7 +286,9 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
   )
 }
 
-function Crm({ leads, channel, setChannel, onSelectLead, onAddLead }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void }) {
+function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, onOpenChat }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void; onOpenChat?: (lead: Lead) => void; onMoveLead: (leadId: Lead['id'], stage: Stage) => void }) {
+  const [draggingId, setDraggingId] = useState<Lead['id'] | null>(null)
+  const [overStage, setOverStage] = useState<Stage | null>(null)
   const visible = useMemo(() => channel === 'Todos os canais' ? leads : leads.filter((lead) => lead.channel === channel), [leads, channel])
   return (
     <>
@@ -297,10 +301,16 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead }: { leads: L
         {stages.map((stage, index) => {
           const columnLeads = visible.filter((lead) => lead.stage === stage)
           const total = columnLeads.reduce((sum, lead) => sum + (lead.value ?? 0), 0)
-          return <article className={`kanban-column column-${index + 1}`} key={stage}>
+          return <article
+            className={`kanban-column column-${index + 1}${overStage === stage ? ' kanban-column--over' : ''}`}
+            key={stage}
+            onDragOver={(event) => { if (draggingId === null) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (overStage !== stage) setOverStage(stage) }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOverStage((current) => current === stage ? null : current) }}
+            onDrop={(event) => { event.preventDefault(); if (draggingId !== null) onMoveLead(draggingId, stage); setDraggingId(null); setOverStage(null) }}
+          >
             <header><div><span className="column-marker"/><h2>{stage}</h2><b>{columnLeads.length}</b></div><button type="button" aria-label={`Ações de ${stage}`}><MoreHorizontal size={18}/></button></header>
             <div className="column-value">{total ? money(total) : '—'}</div>
-            <div className="column-cards">{columnLeads.map((lead) => <LeadCard key={lead.id} lead={lead} onClick={() => onSelectLead(lead)} />)}</div>
+            <div className="column-cards">{columnLeads.map((lead) => <LeadCard key={lead.id} lead={lead} onClick={() => onSelectLead(lead)} onOpenChat={onOpenChat && lead.phone ? () => onOpenChat(lead) : undefined} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(lead.id)); setDraggingId(lead.id) }} onDragEnd={() => { setDraggingId(null); setOverStage(null) }} />)}</div>
             <button className="add-card" type="button" onClick={onAddLead}><Plus size={16} /> Adicionar lead</button>
           </article>
         })}
@@ -711,6 +721,7 @@ export default function App() {
   const [showLeadForm, setShowLeadForm] = useState(false)
   const [showSaleForm, setShowSaleForm] = useState(false)
   const [syncError, setSyncError] = useState('')
+  const [chatLead, setChatLead] = useState<Lead | null>(null)
   const [stageIds, setStageIds] = useState<Record<string, string>>({})
 
   const navigate = (path: string, replace = false) => {
@@ -756,10 +767,20 @@ export default function App() {
     setAccount(me)
     if (me.access_state === 'expired') return
     const [dashboard, crm, salesResult, conversationsResult, notificationsResult] = await Promise.all([api.dashboard(activeSession), api.crm(activeSession), api.sales(activeSession), api.conversations(activeSession), api.notifications(activeSession)])
+    const digitsOnly = (value: string) => value.replace(/\D/g, '')
+    const lastByPhone = new Map(conversationsResult.map((conversation) => [digitsOnly(conversation.phone), conversation]))
+    const previewFor = (conversation?: (typeof conversationsResult)[number]) => {
+      if (!conversation) return 'Sem mensagens sincronizadas ainda.'
+      const kind = (conversation.last_type ?? '').toLowerCase()
+      const label = kind.includes('image') ? '📷 Foto' : kind.includes('audio') ? '🎤 Áudio' : kind.includes('video') ? '🎬 Vídeo' : kind.includes('document') ? '📎 Documento' : ''
+      const text = [label, conversation.last_message].filter(Boolean).join(' · ') || 'Sem mensagens sincronizadas ainda.'
+      return `${conversation.last_direction === 'outbound' ? 'Você: ' : ''}${text}`
+    }
     const freshLeads: Lead[] = crm.flatMap((stage) => stage.opportunities.map((opportunity) => ({
       id: opportunity.id,
       opportunityId: opportunity.id,
       stageId: stage.id,
+      phone: opportunity.phone ?? undefined,
       name: opportunity.contactName ?? opportunity.title,
       initials: initialsFor(opportunity.contactName ?? opportunity.title),
       stage: stages.includes(stage.name as Stage) ? stage.name as Stage : 'Novos leads',
@@ -767,7 +788,7 @@ export default function App() {
       source: (opportunity.source as Lead['source']) || 'Orgânico',
       value: opportunity.value === null ? undefined : Number(opportunity.value),
       time: opportunity.lastActivityAt ? new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round((new Date(opportunity.lastActivityAt).getTime() - Date.now()) / 3_600_000), 'hour') : 'agora',
-      lastMessage: 'Sem mensagens sincronizadas ainda.',
+      lastMessage: previewFor(opportunity.phone ? lastByPhone.get(digitsOnly(opportunity.phone)) : undefined),
       temperature: temperatureLabel[opportunity.temperature] ?? 'Novo',
       owner: me.name,
       avatar: initialsFor(me.name),
@@ -785,6 +806,12 @@ export default function App() {
     if (!session) return
     void loadWorkspace(session).catch((reason) => setSyncError(reason instanceof Error ? reason.message : 'Não foi possível sincronizar seus dados.'))
   }, [session])
+
+  useEffect(() => {
+    if (!session || page !== 'crm') return
+    const interval = window.setInterval(() => { void loadWorkspace(session).catch(() => undefined) }, 10_000)
+    return () => window.clearInterval(interval)
+  }, [session, page])
 
   const authenticateSession = (nextSession: Session, isNew = false) => {
     localStorage.setItem('otimiza-crm-session', JSON.stringify(nextSession))
@@ -826,6 +853,28 @@ export default function App() {
     setSelectedLead(updated)
   }
 
+  const openLeadChat = (lead: Lead) => {
+    if (!lead.phone) return
+    setChatLead(lead)
+  }
+
+  const moveLead = (leadId: Lead['id'], stage: Stage) => {
+    const lead = leads.find((item) => item.id === leadId)
+    if (!lead || lead.stage === stage) return
+    if (stage === 'Ganhos') { setSelectedLead(lead); setShowSaleForm(true); return }
+    const previousStage = lead.stage
+    const apply = (value: Stage) => {
+      setLeads((current) => current.map((item) => item.id === leadId ? { ...item, stage: value } : item))
+      setSelectedLead((current) => current && current.id === leadId ? { ...current, stage: value } : current)
+    }
+    apply(stage)
+    if (session && lead.opportunityId) {
+      const stageId = stageIds[stage]
+      if (!stageId) { apply(previousStage); setSyncError('As etapas do funil ainda estão sendo sincronizadas.'); return }
+      void api.updateOpportunity(session, lead.opportunityId, { stageId }).then(() => loadWorkspace(session)).catch((reason) => { apply(previousStage); setSyncError(reason instanceof Error ? reason.message : 'Não foi possível mover o lead.') })
+    }
+  }
+
   const registerSale = async (amount: number) => {
     if (!selectedLead) return
     const updated = { ...selectedLead, stage: 'Ganhos' as Stage, value: amount, time: 'agora' }
@@ -844,9 +893,9 @@ export default function App() {
 
   const renderContent = () => {
     if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} leads={leads} sales={sales} />
-    if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} />
+    if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} onMoveLead={moveLead} onOpenChat={session ? openLeadChat : undefined} />
     if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
-    if (page === 'conversas') return <ConversationsPage conversations={conversations}/>
+    if (page === 'conversas') return session ? <ChatPage session={session} initial={conversations} botEnabled={account?.plan === 'chatbot'} /> : <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales} session={session!} onRefresh={() => loadWorkspace(session!)}/>
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} />
@@ -870,6 +919,7 @@ export default function App() {
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
       <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
+      {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
       {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
       {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
