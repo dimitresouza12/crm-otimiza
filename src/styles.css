@@ -467,6 +467,10 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .column-cards::-webkit-scrollbar-thumb { border: 2px solid #e5e7ed; border-radius: 99px; background: #aaa6df; }
 .column-cards::-webkit-scrollbar-thumb:hover { background: #7669ef; }
 
+/* Interesse do lead, com linguagem comercial direta. */
+.temperature { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 8px; line-height: 1; white-space: nowrap; }
+.temperature i { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
+
 @media (max-width: 1180px) {
   .kanban-scroll-guide { justify-content: flex-start; }
   .kanban-shell::after { display: none; }
