@@ -471,10 +471,26 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .temperature { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 8px; line-height: 1; white-space: nowrap; }
 .temperature__emoji { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 10px; line-height: 1; }
 
+/* Sugestões imediatas na busca do funil. */
+.lead-search { position: relative; z-index: 8; width: 252px; }
+.lead-search .search-box { width: 100%; }
+.lead-search__results { position: absolute; top: calc(100% + 8px); left: 0; width: min(360px, calc(100vw - 52px)); overflow: hidden; border: 1px solid #dedfea; border-radius: 10px; background: #fff; box-shadow: 0 14px 30px rgba(39, 43, 67, .16); }
+.lead-search__result { display: grid; width: 100%; grid-template-columns: 25px minmax(0, 1fr) 15px; align-items: center; gap: 8px; padding: 9px 10px; color: #929aa8; border: 0; border-bottom: 1px solid #eef0f4; background: #fff; text-align: left; }
+.lead-search__result:last-child { border-bottom: 0; }
+.lead-search__result:hover, .lead-search__result:focus-visible { color: #5f58cf; background: #f7f6ff; outline: 0; }
+.lead-search__result .avatar { width: 25px; height: 25px; font-size: 8px; }
+.lead-search__result span:nth-child(2) { min-width: 0; }.lead-search__result b, .lead-search__result small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-search__result b { color: #444b5a; font-size: 10px; }.lead-search__result small { padding-top: 3px; color: #9098a6; font-size: 8px; }
+.lead-search__results > p { margin: 0; padding: 12px; color: #89919f; font-size: 10px; }
+
 @media (max-width: 1180px) {
   .kanban-scroll-guide { justify-content: flex-start; }
   .kanban-shell::after { display: none; }
   .kanban { height: auto; overflow-y: visible; }
   .kanban-column { align-self: start; max-height: none; }
   .column-cards { overflow: visible; padding-right: 2px; }
+}
+
+@media (max-width: 790px) {
+  .lead-search { min-width: 210px; }
 }

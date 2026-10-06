@@ -308,14 +308,20 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
 function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, onOpenChat }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void; onOpenChat?: (lead: Lead) => void; onMoveLead: (leadId: Lead['id'], stage: Stage) => void }) {
   const [draggingId, setDraggingId] = useState<Lead['id'] | null>(null)
   const [overStage, setOverStage] = useState<Stage | null>(null)
-  const visible = useMemo(() => channel === 'Todos os canais' ? leads : leads.filter((lead) => lead.channel === channel), [leads, channel])
+  const [search, setSearch] = useState('')
+  const searchTerm = search.trim().toLocaleLowerCase('pt-BR')
+  const visible = useMemo(() => leads.filter((lead) => {
+    const isChannelMatch = channel === 'Todos os canais' || lead.channel === channel
+    const isSearchMatch = !searchTerm || `${lead.name} ${lead.phone ?? ''} ${lead.source}`.toLocaleLowerCase('pt-BR').includes(searchTerm)
+    return isChannelMatch && isSearchMatch
+  }), [leads, channel, searchTerm])
   return (
     <>
       <section className="page-head crm-head">
         <div><span className="eyebrow">PIPELINE COMERCIAL</span><h1>CRM</h1><p>Acompanhe cada conversa até a venda confirmada.</p></div>
         <div className="head-actions"><label className="channel-select"><Activity size={16}/><select value={channel} onChange={(event) => setChannel(event.target.value as Channel)}>{channels.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={16}/></label><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18} /> Novo lead</button></div>
       </section>
-      <section className="crm-toolbar"><div className="search-box"><Search size={17} /><input placeholder="Buscar lead ou telefone" aria-label="Buscar lead ou telefone" /></div><button className="toolbar-button" type="button"><Filter size={16} /> Filtros</button><button className="toolbar-button" type="button"><Settings2 size={16} /> Etapas</button><span className="toolbar-spacer"/><span className="sync-status"><i /> WhatsApp sincronizado agora</span></section>
+      <section className="crm-toolbar"><div className="lead-search"><div className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead ou telefone" aria-label="Buscar lead ou telefone" /></div>{searchTerm && <div className="lead-search__results" role="listbox" aria-label="Leads encontrados">{visible.slice(0, 5).map((lead) => <button className="lead-search__result" type="button" role="option" key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(''); onSelectLead(lead) }}><Avatar initials={lead.initials} small/><span><b>{lead.name}</b><small>{lead.phone || lead.source}</small></span><ChevronRight size={15}/></button>)}{!visible.length && <p>Nenhum lead encontrado.</p>}</div>}</div><button className="toolbar-button" type="button"><Filter size={16} /> Filtros</button><button className="toolbar-button" type="button"><Settings2 size={16} /> Etapas</button><span className="toolbar-spacer"/><span className="sync-status"><i /> WhatsApp sincronizado agora</span></section>
       <div className="kanban-shell">
       <div className="kanban-scroll-guide" aria-label="Há mais etapas do funil à direita"><span>Deslize para ver as próximas etapas</span><ArrowRight size={17}/></div>
       <section className="kanban" aria-label="Pipeline de vendas">
