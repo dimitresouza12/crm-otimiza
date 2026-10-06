@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -33,7 +33,28 @@ const app = Fastify({
 const currentDir = dirname(fileURLToPath(import.meta.url))
 const appShell = await readFile(join(currentDir, '..', 'index.html'), 'utf8')
 
-await app.register(helmet, { contentSecurityPolicy: config.nodeEnv === 'production' })
+// O app é um único script embutido no HTML. Em vez de liberar qualquer script inline, a CSP aceita só o hash dele.
+// O navegador troca CRLF por LF antes de calcular o hash do script, então fazemos o mesmo.
+const inlineScriptHashes = [...appShell.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => `'sha256-${createHash('sha256').update(match[1].replace(/\r\n?/g, '\n')).digest('base64')}'`)
+await app.register(helmet, {
+  contentSecurityPolicy: config.nodeEnv === 'production'
+    ? {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", ...inlineScriptHashes],
+          styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+          fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+          imgSrc: ["'self'", 'data:', 'blob:'],
+          mediaSrc: ["'self'", 'blob:', 'data:'],
+          connectSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+          frameAncestors: ["'self'"],
+        },
+      }
+    : false,
+})
 await app.register(cors, {
   origin: (origin, callback) => callback(null, !origin || config.allowedOrigins.includes(origin)),
   credentials: true,
