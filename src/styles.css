@@ -458,13 +458,19 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .lead-card__chat--whatsapp svg { color: inherit; }
 @keyframes kanban-scroll-hint { 50% { transform: translateX(4px); } }
 
-/* Os cartões usam a rolagem principal da página: nenhum lead fica preso em uma coluna. */
-.kanban { height: auto; min-height: 0; overflow-y: visible; }
-.kanban-column { align-self: start; max-height: none; }
-.column-cards { overflow: visible; }
+/* No desktop, cada etapa mantém sua própria rolagem para o Kanban ficar alinhado. */
+.kanban { height: calc(100dvh - 307px); min-height: 510px; overflow-y: hidden; }
+.kanban-column { align-self: stretch; max-height: 100%; min-height: 0; }
+.column-cards { overflow-y: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: #aaa6df #e5e7ed; }
+.column-cards::-webkit-scrollbar { width: 7px; }
+.column-cards::-webkit-scrollbar-track { border-radius: 99px; background: #e5e7ed; }
+.column-cards::-webkit-scrollbar-thumb { border: 2px solid #e5e7ed; border-radius: 99px; background: #aaa6df; }
+.column-cards::-webkit-scrollbar-thumb:hover { background: #7669ef; }
 
 @media (max-width: 1180px) {
   .kanban-scroll-guide { justify-content: flex-start; }
   .kanban-shell::after { display: none; }
-  .kanban { height: auto; }
+  .kanban { height: auto; overflow-y: visible; }
+  .kanban-column { align-self: start; max-height: none; }
+  .column-cards { overflow: visible; padding-right: 2px; }
 }
