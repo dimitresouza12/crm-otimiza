@@ -212,6 +212,10 @@ function Avatar({ initials, small = false }: { initials: string; small?: boolean
   return <span className={`avatar ${small ? 'avatar--small' : ''}`}>{initials}</span>
 }
 
+function WhatsAppIcon({ size = 16 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-11.78 7.05L4 20l1.48-4.02A8 8 0 1 1 20 11.5Z" fill="currentColor"/><path d="M9.05 7.75c.18-.43.36-.44.63-.44h.54c.16 0 .38.06.49.35l.75 1.78c.08.19.05.4-.08.55l-.43.54c-.09.1-.12.25-.06.37.25.53.72 1.17 1.28 1.62.57.46 1.24.79 1.79.95.13.04.27 0 .36-.11l.46-.55c.13-.15.33-.21.51-.13l1.69.79c.28.13.32.35.29.51-.1.58-.34 1.09-.77 1.33-.3.17-.7.31-1.16.24-1.02-.17-2.35-.88-3.54-1.98-1.19-1.09-1.95-2.42-2.15-3.41-.1-.46.01-.87.15-1.2Z" fill="#fff"/></svg>
+}
+
 function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead: Lead; onClick: () => void; onOpenChat?: () => void; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void }) {
   return (
     <button className="lead-card" onClick={onClick} type="button" draggable={Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd}>
@@ -219,7 +223,7 @@ function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead:
         <Avatar initials={lead.initials} />
         <span className={`temperature temperature--${lead.temperature.toLowerCase()}`}>{lead.temperature}</span>
       </div>
-      <div className="lead-card__name-row"><strong>{lead.name}</strong><span className="lead-card__actions">{onOpenChat && <span className="lead-card__chat" role="button" tabIndex={0} title="Abrir conversa" aria-label={`Abrir conversa com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><MessageCircleMore size={16} /></span>}<MoreHorizontal size={17} /></span></div>
+      <div className="lead-card__name-row"><strong>{lead.name}</strong><span className="lead-card__actions">{onOpenChat && <span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={15} /></span>}<MoreHorizontal size={17} /></span></div>
       <p>{lead.lastMessage}</p>
       <div className="lead-card__tags"><span>{lead.source}</span><span>{lead.channel}</span></div>
       <div className="lead-card__footer">
@@ -301,6 +305,8 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
         <div className="head-actions"><label className="channel-select"><Activity size={16}/><select value={channel} onChange={(event) => setChannel(event.target.value as Channel)}>{channels.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={16}/></label><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18} /> Novo lead</button></div>
       </section>
       <section className="crm-toolbar"><div className="search-box"><Search size={17} /><input placeholder="Buscar lead ou telefone" aria-label="Buscar lead ou telefone" /></div><button className="toolbar-button" type="button"><Filter size={16} /> Filtros</button><button className="toolbar-button" type="button"><Settings2 size={16} /> Etapas</button><span className="toolbar-spacer"/><span className="sync-status"><i /> WhatsApp sincronizado agora</span></section>
+      <div className="kanban-shell">
+      <div className="kanban-scroll-guide" aria-label="Há mais etapas do funil à direita"><span>Deslize para ver as próximas etapas</span><ArrowRight size={17}/></div>
       <section className="kanban" aria-label="Pipeline de vendas">
         {stages.map((stage, index) => {
           const columnLeads = visible.filter((lead) => lead.stage === stage)
@@ -319,6 +325,7 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
           </article>
         })}
       </section>
+      </div>
     </>
   )
 }

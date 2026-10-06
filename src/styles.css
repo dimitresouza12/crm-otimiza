@@ -445,3 +445,21 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 :root { --ink: #20253a; --muted: #687187; --line: #e4e7ef; --paper: #fff; --lavender: #7669ef; --lavender-deep: #302762; --mint: #2fbd9a; }
 
 .chat-msg__who--agent { color: var(--lavender-deep); }
+
+/* Navegação horizontal do funil */
+.kanban-shell { position: relative; }
+.kanban-scroll-guide { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-height: 31px; padding: 0 4px 7px; color: #6259d8; font-size: 11px; font-weight: 700; }
+.kanban-scroll-guide span { display: inline-flex; align-items: center; min-height: 25px; padding: 0 10px; border: 1px solid #d9d6ff; border-radius: 999px; background: #f6f5ff; box-shadow: 0 3px 10px rgba(73, 62, 174, .07); }
+.kanban-scroll-guide > svg { flex: 0 0 auto; animation: kanban-scroll-hint 1.5s ease-in-out infinite; }
+.kanban-shell::after { position: absolute; z-index: 2; top: 31px; right: 0; bottom: 12px; width: 42px; pointer-events: none; content: ''; background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .94)); }
+.kanban { height: calc(100dvh - 307px); }
+.lead-card__chat--whatsapp { color: #fff; background: #24bf76; box-shadow: 0 3px 8px rgba(36, 191, 118, .19); }
+.lead-card__chat--whatsapp:hover, .lead-card__chat--whatsapp:focus-visible { color: #fff; background: #14945a; }
+.lead-card__chat--whatsapp svg { color: inherit; }
+@keyframes kanban-scroll-hint { 50% { transform: translateX(4px); } }
+
+@media (max-width: 1180px) {
+  .kanban-scroll-guide { justify-content: flex-start; }
+  .kanban-shell::after { display: none; }
+  .kanban { height: auto; }
+}
