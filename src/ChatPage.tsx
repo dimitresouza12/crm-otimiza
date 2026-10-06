@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react'
-import { ArrowLeft, Bot, Download, FileText, MessageCircleMore, Mic, Paperclip, Pause, Play, Search, Send, Trash2, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Bot, Check, CheckCheck, Download, FileText, MessageCircleMore, Mic, Paperclip, Pause, Play, Reply, Search, Send, Trash2, X } from 'lucide-react'
 import { api, type ChatMessage, type Session } from './lib/api'
+import { onChatEvent } from './lib/events'
 
 type ConversationRow = Awaited<ReturnType<typeof api.conversations>>[number]
 type Kind = 'text' | 'image' | 'audio' | 'video' | 'document' | 'sticker'
@@ -83,6 +84,13 @@ function AudioPlayer({ src }: { src: string }) {
   )
 }
 
+function Ticks({ status }: { status?: ChatMessage['delivery_status'] }) {
+  if (!status) return null
+  if (status === 'failed') return <span className="chat-ticks chat-ticks--failed" title="Não foi possível entregar"><AlertCircle size={13} /></span>
+  const label = status === 'read' ? 'Lida' : status === 'delivered' ? 'Entregue' : 'Enviada'
+  return <span className={`chat-ticks chat-ticks--${status}`} title={label} aria-label={label}>{status === 'sent' ? <Check size={14} /> : <CheckCheck size={14} />}</span>
+}
+
 function MessageMedia({ session, message, kind, onOpenImage }: { session: Session; message: ChatMessage; kind: Kind; onOpenImage: (url: string) => void }) {
   const { url, failed } = useMedia(session, message.id, message.has_media)
   if (!message.has_media) return <div className="chat-media-pending">Carregando {kind === 'audio' ? 'áudio' : kind === 'image' ? 'foto' : 'arquivo'}…</div>
@@ -108,30 +116,39 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const lastMessageId = useRef<string | null>(null)
+  const markedRead = useRef<string | null>(null)
+  const textArea = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const chunks = useRef<Blob[]>([])
   const stream = useRef<MediaStream | null>(null)
   const timer = useRef<number | undefined>(undefined)
 
+  const load = useCallback(async () => {
+    try {
+      const result = await api.conversationMessages(session, activeId)
+      setMessages(result.messages)
+      setBotPaused(result.botPaused)
+      const lastInbound = result.messages.filter((message) => message.direction === 'inbound').at(-1)?.sent_at ?? null
+      if (lastInbound && lastInbound !== markedRead.current && document.visibilityState === 'visible') {
+        markedRead.current = lastInbound
+        void api.markConversationRead(session, activeId).then(() => onActivity?.()).catch(() => { markedRead.current = null })
+      }
+      setError('')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar a conversa.') }
+    finally { setThreadLoading(false) }
+  }, [activeId, session, onActivity])
+
   useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const result = await api.conversationMessages(session, activeId)
-        if (cancelled) return
-        setMessages(result.messages)
-        setBotPaused(result.botPaused)
-      } catch (reason) { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar a conversa.') }
-      finally { if (!cancelled) setThreadLoading(false) }
-    }
     void load()
-    const interval = window.setInterval(() => { void load() }, 3000)
-    return () => { cancelled = true; window.clearInterval(interval) }
-  }, [activeId, session])
+    const interval = window.setInterval(() => { void load() }, 15_000)
+    const unsubscribe = onChatEvent((event) => { if (event.type === 'reconnected' || !event.conversationId || event.conversationId === activeId) void load() })
+    return () => { window.clearInterval(interval); unsubscribe() }
+  }, [activeId, load])
 
   useEffect(() => {
     const last = messages.at(-1)?.id ?? null
@@ -167,13 +184,13 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
     if (pending) {
       const file = pending
       void run(async () => {
-        appendSent(await api.sendChatMedia(session, activeId, { kind: file.kind, mimeType: file.file.type || 'application/octet-stream', fileName: file.file.name, data: await toBase64(file.file), caption: value || undefined }))
-        setPending(null); setText('')
+        appendSent(await api.sendChatMedia(session, activeId, { kind: file.kind, mimeType: file.file.type || 'application/octet-stream', fileName: file.file.name, data: await toBase64(file.file), caption: value || undefined, replyToMessageId: replyTo?.id }))
+        setPending(null); setText(''); setReplyTo(null)
       })
       return
     }
     if (!value) return
-    void run(async () => { appendSent(await api.sendChatText(session, activeId, value)); setText('') })
+    void run(async () => { appendSent(await api.sendChatText(session, activeId, value, replyTo?.id)); setText(''); setReplyTo(null) })
   }
 
   const pickFile = (file: File | undefined) => {
@@ -219,7 +236,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
       stream.current?.getTracks().forEach((track) => track.stop())
       const blob = new Blob(chunks.current, { type: instance.mimeType || 'audio/webm' })
       chunks.current = []
-      if (send && blob.size > 0) void run(async () => appendSent(await api.sendChatMedia(session, activeId, { kind: 'audio', mimeType: blob.type, fileName: 'audio', data: await toBase64(blob) })))
+      if (send && blob.size > 0) void run(async () => appendSent(await api.sendChatMedia(session, activeId, { kind: 'audio', mimeType: blob.type, fileName: 'audio', data: await toBase64(blob), replyToMessageId: replyTo?.id })))
     }
     instance.stop()
     recorder.current = null
@@ -260,12 +277,14 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
             <div key={message.id} className="chat-row">
               {newDay && <div className="chat-day"><span>{dayLabel(message.sent_at)}</span></div>}
               <div className={`chat-msg ${outbound ? 'chat-msg--out' : 'chat-msg--in'} chat-msg--${author}`}>
+                <button className="chat-msg__reply" type="button" aria-label="Responder esta mensagem" title="Responder" onClick={() => { setReplyTo(message); textArea.current?.focus() }}><Reply size={13} /></button>
                 {author === 'bot' && <span className="chat-msg__who"><Bot size={11} /> Chatbot</span>}
                 {author === 'phone' && <span className="chat-msg__who">Pelo celular</span>}
+                {message.quoted_text && <div className={`chat-quote chat-quote--${message.quoted_from === 'us' ? 'us' : 'customer'}`}><b>{message.quoted_from === 'us' ? 'Você' : 'Cliente'}</b><span>{message.quoted_text}</span></div>}
                 {kind !== 'text' && <MessageMedia session={session} message={message} kind={kind} onOpenImage={setLightbox} />}
                 {message.body && <p>{message.body}</p>}
                 {!message.body && kind === 'text' && <p className="chat-msg__empty">Mensagem sem texto</p>}
-                <time>{timeLabel(message.sent_at)}</time>
+                <span className="chat-msg__meta"><time>{timeLabel(message.sent_at)}</time>{outbound && <Ticks status={message.delivery_status} />}</span>
               </div>
             </div>
           )
@@ -279,6 +298,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
           <button type="button" aria-label="Remover anexo" onClick={() => setPending(null)}><X size={16} /></button>
         </div>
       )}
+      {replyTo && <div className="chat-replying"><Reply size={15} /><span><b>Respondendo a {replyTo.direction === 'inbound' ? 'cliente' : 'você'}</b>{replyTo.body || (replyTo.message_type.includes('image') ? '📷 Foto' : replyTo.message_type.includes('audio') ? '🎤 Áudio' : replyTo.message_type.includes('video') ? '🎬 Vídeo' : replyTo.message_type.includes('document') ? '📎 Documento' : 'Mensagem')}</span><button type="button" aria-label="Cancelar resposta" onClick={() => setReplyTo(null)}><X size={15} /></button></div>}
       {recording ? (
         <div className="chat-composer chat-composer--recording">
           <button type="button" className="chat-icon-button" aria-label="Cancelar gravação" onClick={() => stopRecording(false)}><Trash2 size={19} /></button>
@@ -289,7 +309,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
         <div className="chat-composer">
           <input ref={fileInput} type="file" hidden accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" onChange={onFileChange} />
           <button type="button" className="chat-icon-button" aria-label="Anexar foto ou arquivo" onClick={() => fileInput.current?.click()} disabled={sending}><Paperclip size={19} /></button>
-          <textarea value={text} rows={1} placeholder={pending ? 'Legenda (opcional)' : 'Escreva uma mensagem'} aria-label="Mensagem" onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px` }} onKeyDown={onKeyDown} onPaste={onPaste} disabled={sending} />
+          <textarea ref={textArea} value={text} rows={1} placeholder={pending ? 'Legenda (opcional)' : 'Escreva uma mensagem'} aria-label="Mensagem" onChange={(event) => { setText(event.target.value); event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px` }} onKeyDown={onKeyDown} onPaste={onPaste} disabled={sending} />
           {hasContent
             ? <button type="button" className="chat-send" aria-label="Enviar mensagem" disabled={sending} onClick={sendText}><Send size={18} /></button>
             : <button type="button" className="chat-send chat-send--mic" aria-label="Gravar áudio" disabled={sending} onClick={() => void startRecording()}><Mic size={19} /></button>}
@@ -317,8 +337,9 @@ export function ChatPage({ session, initial, botEnabled }: { session: Session; i
 
   useEffect(() => {
     void refreshList().catch(() => setListLoaded(true))
-    const interval = window.setInterval(() => { void refreshList().catch(() => undefined) }, 4000)
-    return () => window.clearInterval(interval)
+    const interval = window.setInterval(() => { void refreshList().catch(() => undefined) }, 20_000)
+    const unsubscribe = onChatEvent(() => { void refreshList().catch(() => undefined) })
+    return () => { window.clearInterval(interval); unsubscribe() }
   }, [refreshList])
 
   const filtered = useMemo(() => {
@@ -337,10 +358,10 @@ export function ChatPage({ session, initial, botEnabled }: { session: Session; i
             {filtered.map((item) => {
               const name = item.contact_name || formatPhone(item.phone)
               return (
-                <button type="button" key={item.id} className={`chat-item ${item.id === activeId ? 'is-active' : ''}`} onClick={() => { setActiveId(item.id); setMobileThread(true) }}>
+                <button type="button" key={item.id} className={`chat-item ${item.id === activeId ? 'is-active' : ''} ${item.unread_count ? 'has-unread' : ''}`} onClick={() => { setActiveId(item.id); setMobileThread(true); setList((current) => current.map((row) => row.id === item.id ? { ...row, unread_count: 0 } : row)) }}>
                   <span className="avatar">{initialsOf(name)}</span>
                   <span className="chat-item__main"><b>{name}</b><small>{item.last_sent_by === 'bot' && <Bot size={12} />}{previewOf(item)}</small></span>
-                  <span className="chat-item__meta"><time>{listTime(item.last_message_at ?? item.sent_at)}</time>{botEnabled && item.bot_paused && <i title="Chatbot pausado"><Pause size={10} /></i>}</span>
+                  <span className="chat-item__meta"><time>{listTime(item.last_message_at ?? item.sent_at)}</time>{item.unread_count ? <em className="chat-unread" aria-label={`${item.unread_count} não lidas`}>{item.unread_count > 99 ? '99+' : item.unread_count}</em> : botEnabled && item.bot_paused ? <i title="Chatbot pausado"><Pause size={10} /></i> : null}</span>
                 </button>
               )
             })}

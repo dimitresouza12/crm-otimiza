@@ -87,6 +87,7 @@ const responseFormat = (stages: string[]) => ({
 export type AnalysisInput = {
   stages: string[]
   current: { stage: string; temperature: string; value: number | null; source: string | null }
+  catalog?: Array<{ name: string; price: number | null }>
   transcript: string
 }
 
@@ -104,9 +105,10 @@ export const analyzeConversation = async (input: AnalysisInput) => {
   ].join('\n')
   const user = [
     `Situação atual no CRM: etapa "${input.current.stage}", temperatura ${input.current.temperature}, valor ${input.current.value ?? 'não informado'}, origem ${input.current.source ?? 'não informada'}.`,
+    input.catalog?.length ? `Tabela de preços da empresa (use para estimar o valor quando o cliente citar um item): ${input.catalog.map((item) => `${item.name}${item.price === null ? '' : ` R$ ${item.price}`}`).join('; ')}.` : '',
     'Conversa (mais recente por último):',
     input.transcript,
-  ].join('\n\n')
+  ].filter(Boolean).join('\n\n')
   const response = await authorized('/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

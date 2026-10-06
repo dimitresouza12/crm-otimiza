@@ -48,7 +48,9 @@ export const runAnalysis = async (conversationId: string) => {
     source: opportunity.source,
     locked: opportunity.locked,
   }
+  const catalogRow = (await query<{ catalog: Array<{ name: string; price: number | null }> }>('SELECT catalog FROM chatbot_settings WHERE company_id = $1', [conversation.company_id])).rows[0]
   const analysis = await analyzeConversation({
+    catalog: catalogRow?.catalog ?? [],
     stages: stages.filter((stage) => stage.kind === 'open').map((stage) => stage.name),
     current: { stage: current.stage.name, temperature: current.temperature, value: current.value, source: current.source },
     transcript: lines.join('\n'),

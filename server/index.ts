@@ -15,8 +15,10 @@ import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { foldText, pickText } from './message-text.js'
+import { chooseBotReply, defaultBusinessHours, isWithinBusinessHours, splitKeywords, type BotSettings } from './chatbot-logic.js'
+import { pickText } from './message-text.js'
 import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
+import { publishChat, subscribeCompany } from './events.js'
 import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
 
@@ -60,7 +62,7 @@ await app.register(cors, {
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 })
-await app.register(rateLimit, { max: 120, timeWindow: '1 minute' })
+await app.register(rateLimit, { max: 600, timeWindow: '1 minute' })
 await app.register(jwt, { secret: config.jwtSecret() })
 await app.register(rawBody, { field: 'rawBody', global: false, encoding: false, runFirst: true })
 
@@ -352,6 +354,7 @@ app.get('/api/conversations', { preHandler: authenticate }, async (request, repl
   const { rows } = await query(
     `SELECT cv.id, cv.status, cv.last_message_at, c.name AS contact_name, c.phone_e164 AS phone,
        (cv.bot_paused_until IS NOT NULL AND cv.bot_paused_until > now()) AS bot_paused,
+       (SELECT count(*)::int FROM messages um WHERE um.conversation_id = cv.id AND um.direction = 'inbound' AND (cv.agent_read_at IS NULL OR um.sent_at > cv.agent_read_at)) AS unread_count,
        wc.name AS channel_name, latest.body AS last_message, latest.direction AS last_direction, latest.sent_at, latest.message_type AS last_type, latest.sent_by AS last_sent_by
      FROM conversations cv
      JOIN contacts c ON c.id = cv.contact_id
@@ -374,7 +377,7 @@ app.get('/api/conversations/:conversationId/messages', { preHandler: authenticat
   const conversation = await query<{ id: string; bot_paused: boolean }>(`SELECT id, (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS bot_paused FROM conversations WHERE id = $1 AND company_id = $2`, [params.data.conversationId, scope.companyId])
   if (!conversation.rows[0]) return reply.code(404).send({ error: 'Conversa não encontrada.' })
   const { rows } = await query(
-    `SELECT id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media FROM (
+    `SELECT id, direction, message_type, body, sent_at, sent_by, delivery_status, quoted_text, quoted_from, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media FROM (
        SELECT * FROM messages WHERE company_id = $1 AND conversation_id = $2 ORDER BY sent_at DESC LIMIT 300
      ) recent ORDER BY sent_at ASC`, [scope.companyId, params.data.conversationId],
   )
@@ -392,19 +395,33 @@ const loadChatTarget = async (conversationId: string, companyId: string) => {
   return rows[0] ?? null
 }
 
-const storeAgentMessage = async (target: { company_id: string; conversation_id: string }, input: { externalId: string | null; type: string; body: string | null; mediaPath?: string; mediaMime?: string; mediaName?: string | null }) => {
+const storeAgentMessage = async (target: { company_id: string; conversation_id: string }, input: { externalId: string | null; type: string; body: string | null; mediaPath?: string; mediaMime?: string; mediaName?: string | null; quote?: QuoteInfo | null }) => {
   const externalId = input.externalId ?? `agent:${randomUUID()}`
   markApiMessage(externalId)
   const { rows } = await query(
-    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by, media_path, media_mime, media_name)
-     VALUES ($1, $2, $3, 'outbound', $4, $5, now(), '{"source":"agent"}'::jsonb, 'agent', $6, $7, $8)
-     ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'agent', message_type = EXCLUDED.message_type, body = COALESCE(EXCLUDED.body, messages.body), media_path = EXCLUDED.media_path, media_mime = EXCLUDED.media_mime, media_name = EXCLUDED.media_name
-     RETURNING id, direction, message_type, body, sent_at, sent_by, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media`,
-    [target.company_id, target.conversation_id, externalId, input.type, input.body, input.mediaPath ?? null, input.mediaMime ?? null, input.mediaName ?? null],
+    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by, media_path, media_mime, media_name, delivery_status, quoted_external_id, quoted_text, quoted_from)
+     VALUES ($1, $2, $3, 'outbound', $4, $5, now(), '{"source":"agent"}'::jsonb, 'agent', $6, $7, $8, 'sent', $9, $10, $11)
+     ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'agent', message_type = EXCLUDED.message_type, body = COALESCE(EXCLUDED.body, messages.body), media_path = EXCLUDED.media_path, media_mime = EXCLUDED.media_mime, media_name = EXCLUDED.media_name,
+       quoted_external_id = EXCLUDED.quoted_external_id, quoted_text = EXCLUDED.quoted_text, quoted_from = EXCLUDED.quoted_from
+     RETURNING id, direction, message_type, body, sent_at, sent_by, delivery_status, quoted_text, quoted_from, media_mime, media_name, transcript, (media_path IS NOT NULL) AS has_media`,
+    [target.company_id, target.conversation_id, externalId, input.type, input.body, input.mediaPath ?? null, input.mediaMime ?? null, input.mediaName ?? null, input.quote?.externalId ?? null, input.quote?.text.slice(0, 500) ?? null, input.quote?.from ?? null],
   )
   await query(`UPDATE conversations SET last_message_at = now(), bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [target.conversation_id])
   scheduleAnalysis(target.conversation_id, (error) => app.log.error({ error }, 'Falha na análise por IA'))
+  publishChat(target.company_id, target.conversation_id)
   return rows[0]
+}
+
+type QuoteInfo = { externalId: string; text: string; from: 'customer' | 'us'; evolution: { key: { remoteJid: string; fromMe: boolean; id: string }; message: { conversation: string } } }
+
+const loadQuote = async (conversationId: string, replyToMessageId: string | undefined, phone: string): Promise<QuoteInfo | null> => {
+  if (!replyToMessageId) return null
+  const { rows } = await query<{ external_id: string | null; direction: string; body: string | null; message_type: string }>('SELECT external_id, direction, body, message_type FROM messages WHERE id = $1 AND conversation_id = $2', [replyToMessageId, conversationId])
+  const original = rows[0]
+  if (!original?.external_id || /^(agent|chatbot):/.test(original.external_id)) return null
+  const text = original.body?.trim() || (original.message_type.includes('image') ? '📷 Foto' : original.message_type.includes('audio') ? '🎤 Áudio' : original.message_type.includes('video') ? '🎬 Vídeo' : original.message_type.includes('document') ? '📎 Documento' : 'Mensagem')
+  const fromMe = original.direction === 'outbound'
+  return { externalId: original.external_id, text, from: fromMe ? 'us' : 'customer', evolution: { key: { remoteJid: `${phone}@s.whatsapp.net`, fromMe, id: original.external_id }, message: { conversation: text } } }
 }
 
 const chatSendError = (reply: FastifyReply, error: unknown) => {
@@ -416,14 +433,15 @@ app.post('/api/conversations/:conversationId/messages', { preHandler: authentica
   const scope = await companyScope(request, reply)
   if (!scope) return
   const params = conversationParams.safeParse(request.params)
-  const body = z.object({ text: z.string().trim().min(1).max(4000) }).safeParse(request.body)
+  const body = z.object({ text: z.string().trim().min(1).max(4000), replyToMessageId: z.string().uuid().optional() }).safeParse(request.body)
   if (!params.success || !body.success) return reply.code(400).send({ error: 'Escreva uma mensagem para enviar.' })
   const target = await loadChatTarget(params.data.conversationId, scope.companyId)
   if (!target) return reply.code(404).send({ error: 'Conversa não encontrada.' })
   if (target.provider !== 'evolution' || !target.external_account_id || !target.access_token_encrypted) return reply.code(409).send({ error: 'O envio pelo CRM está disponível para números conectados pela Evolution.' })
   try {
-    const result = await evolutionSendText(target.external_account_id, decryptSecret(target.access_token_encrypted), target.phone, body.data.text)
-    return reply.code(201).send(await storeAgentMessage(target, { externalId: evolutionMessageId(result), type: 'text', body: body.data.text }))
+    const quote = await loadQuote(params.data.conversationId, body.data.replyToMessageId, target.phone)
+    const result = await evolutionSendText(target.external_account_id, decryptSecret(target.access_token_encrypted), target.phone, body.data.text, quote?.evolution)
+    return reply.code(201).send(await storeAgentMessage(target, { externalId: evolutionMessageId(result), type: 'text', body: body.data.text, quote }))
   } catch (error) { return chatSendError(reply, error) }
 })
 
@@ -433,6 +451,7 @@ const mediaSchema = z.object({
   fileName: z.string().max(200).optional(),
   data: z.string().min(10),
   caption: z.string().trim().max(1000).optional(),
+  replyToMessageId: z.string().uuid().optional(),
 })
 app.post('/api/conversations/:conversationId/media', { preHandler: authenticate, bodyLimit: 24 * 1024 * 1024, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
   const scope = await companyScope(request, reply)
@@ -451,11 +470,12 @@ app.post('/api/conversations/:conversationId/media', { preHandler: authenticate,
   const token = decryptSecret(target.access_token_encrypted)
   const fileName = (input.fileName ?? (input.kind === 'image' ? 'foto' : input.kind === 'audio' ? 'audio' : 'arquivo')).replace(/[\\/\r\n]/g, '_')
   try {
+    const quote = await loadQuote(params.data.conversationId, input.replyToMessageId, target.phone)
     const result = input.kind === 'audio'
-      ? await evolutionSendAudio(target.external_account_id, token, target.phone, base64)
-      : await evolutionSendMedia(target.external_account_id, token, target.phone, { mediatype: input.kind, mimetype: input.mimeType, base64, fileName, caption: input.caption })
+      ? await evolutionSendAudio(target.external_account_id, token, target.phone, base64, quote?.evolution)
+      : await evolutionSendMedia(target.external_account_id, token, target.phone, { mediatype: input.kind, mimetype: input.mimeType, base64, fileName, caption: input.caption, quoted: quote?.evolution })
     const mediaPath = await saveMediaFile(scope.companyId, base64, input.mimeType, fileName)
-    return reply.code(201).send(await storeAgentMessage(target, { externalId: evolutionMessageId(result), type: input.kind, body: input.caption || null, mediaPath, mediaMime: input.mimeType, mediaName: fileName }))
+    return reply.code(201).send(await storeAgentMessage(target, { externalId: evolutionMessageId(result), type: input.kind, body: input.caption || null, mediaPath, mediaMime: input.mimeType, mediaName: fileName, quote }))
   } catch (error) { return chatSendError(reply, error) }
 })
 
@@ -470,7 +490,37 @@ app.put('/api/conversations/:conversationId/bot', { preHandler: authenticate }, 
      WHERE id = $1 AND company_id = $2 RETURNING (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS bot_paused`, [params.data.conversationId, scope.companyId],
   )
   if (!rows[0]) return reply.code(404).send({ error: 'Conversa não encontrada.' })
+  publishChat(scope.companyId, params.data.conversationId)
   return { botPaused: rows[0].bot_paused }
+})
+
+app.post('/api/conversations/:conversationId/read', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const params = conversationParams.safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Conversa inválida.' })
+  const result = await query('UPDATE conversations SET agent_read_at = now() WHERE id = $1 AND company_id = $2', [params.data.conversationId, scope.companyId])
+  if (!result.rowCount) return reply.code(404).send({ error: 'Conversa não encontrada.' })
+  return reply.code(204).send()
+})
+
+// Canal de tempo real (Server-Sent Events): a tela fica conectada e é avisada quando uma conversa muda.
+app.get('/api/events', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const origin = request.headers.origin
+  reply.hijack()
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    ...(origin && config.allowedOrigins.includes(origin) ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true', Vary: 'Origin' } : {}),
+  })
+  reply.raw.write('retry: 3000\n: conectado\n\n')
+  const unsubscribe = subscribeCompany(scope.companyId, (payload) => reply.raw.write(`data: ${payload}\n\n`))
+  const keepAlive = setInterval(() => reply.raw.write(': ping\n\n'), 25_000)
+  request.raw.on('close', () => { clearInterval(keepAlive); unsubscribe() })
 })
 
 app.get('/api/messages/:messageId/media', { preHandler: authenticate }, async (request, reply) => {
@@ -922,49 +972,111 @@ const chatbotScope = async (request: FastifyRequest, reply: FastifyReply) => {
   return scope
 }
 
+const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled'
+type BotSettingsRow = BotSettings & { ai_enabled: boolean }
+
+const emptyBotSettings: BotSettingsRow = {
+  is_active: false, welcome_message: '', fallback_message: '', off_hours_message: '', business_hours: defaultBusinessHours,
+  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: false,
+}
+
+const loadBotSettings = async (companyId: string): Promise<BotSettingsRow> => {
+  const { rows } = await query<BotSettingsRow>(`SELECT ${botColumns} FROM chatbot_settings WHERE company_id = $1`, [companyId])
+  return rows[0] ?? emptyBotSettings
+}
+
+const loadBotRules = async (companyId: string) => {
+  const { rows } = await query<{ id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }>(
+    'SELECT id, name, trigger_type, trigger_value, response_text, is_active, position FROM chatbot_rules WHERE company_id = $1 ORDER BY position, created_at', [companyId],
+  )
+  return rows
+}
+
 app.get('/api/chatbot', { preHandler: authenticate }, async (request, reply) => {
   const scope = await chatbotScope(request, reply)
   if (!scope) return
   const [settings, channels, rules] = await Promise.all([
-    query<{ is_active: boolean; welcome_message: string | null; fallback_message: string | null; ai_enabled: boolean }>('SELECT is_active, welcome_message, fallback_message, ai_enabled FROM chatbot_settings WHERE company_id = $1', [scope.companyId]),
+    loadBotSettings(scope.companyId),
     query<{ id: string; name: string; phone_number: string | null; status: string; provider: string }>(`SELECT c.id, c.name, c.phone_number, c.status, wc.provider FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.company_id = $1 AND wc.provider IN ('uazapi', 'evolution') ORDER BY c.created_at DESC`, [scope.companyId]),
-    query<{ id: string; channel_id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }>('SELECT id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position FROM chatbot_rules WHERE company_id = $1 ORDER BY position, created_at', [scope.companyId]),
+    loadBotRules(scope.companyId),
   ])
-  return { settings: settings.rows[0] ?? { is_active: false, welcome_message: '', fallback_message: '', ai_enabled: false }, aiAvailable: openaiConfigured(), channels: channels.rows, rules: rules.rows }
+  return { settings, aiAvailable: openaiConfigured(), channels: channels.rows, rules }
 })
 
-const chatbotSettingsSchema = z.object({ isActive: z.boolean(), welcomeMessage: z.string().max(2000).optional(), fallbackMessage: z.string().max(2000).optional(), aiEnabled: z.boolean().optional() })
+const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+const businessHoursSchema = z.object({ enabled: z.boolean(), days: z.array(z.number().int().min(0).max(6)).max(7), start: timeOfDay, end: timeOfDay })
+  .refine((value) => !value.enabled || (value.days.length > 0 && value.start < value.end), { message: 'Escolha os dias e um horário de início anterior ao de término.' })
+const catalogSchema = z.array(z.object({
+  name: z.string().trim().min(1).max(80),
+  price: z.coerce.number().min(0).max(10_000_000).nullable(),
+  description: z.string().trim().max(160).optional(),
+})).max(60)
+const botSettingsFields = {
+  welcomeMessage: z.string().max(2000).optional(),
+  fallbackMessage: z.string().max(2000).optional(),
+  offHoursMessage: z.string().max(2000).optional(),
+  businessHours: businessHoursSchema.optional(),
+  botMode: z.enum(['always', 'outside_hours']).optional(),
+  catalog: catalogSchema.optional(),
+  priceRepliesEnabled: z.boolean().optional(),
+}
+const chatbotSettingsSchema = z.object({ isActive: z.boolean(), aiEnabled: z.boolean().optional(), ...botSettingsFields })
+const clean = (value: string | undefined) => value?.trim() || null
+
 app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, reply) => {
   const scope = await chatbotScope(request, reply)
   if (!scope) return
   const parsed = chatbotSettingsSchema.safeParse(request.body)
-  if (!parsed.success) return reply.code(400).send({ error: 'Configuração do chatbot inválida.' })
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Configuração do chatbot inválida.' })
   const input = parsed.data
   const { rows } = await query(
-    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, ai_enabled)
-     VALUES ($1, $2, $3, $4, COALESCE($5, false))
-     ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, ai_enabled = COALESCE($5, chatbot_settings.ai_enabled), updated_at = now()
-     RETURNING is_active, welcome_message, fallback_message, ai_enabled`, [scope.companyId, input.isActive, input.welcomeMessage ?? null, input.fallbackMessage ?? null, input.aiEnabled ?? null],
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, false))
+     ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, off_hours_message = EXCLUDED.off_hours_message,
+       business_hours = COALESCE($6::jsonb, chatbot_settings.business_hours), bot_mode = COALESCE($7::text, chatbot_settings.bot_mode), catalog = COALESCE($8::jsonb, chatbot_settings.catalog),
+       price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), updated_at = now()
+     RETURNING ${botColumns}`,
+    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null],
   )
   return rows[0]
 })
 
-const chatbotRuleSchema = z.object({ channelId: z.string().uuid(), name: z.string().min(2).max(100), triggerType: z.enum(['keyword', 'first_message']), triggerValue: z.string().max(160).optional(), responseText: z.string().min(1).max(2000) })
+const chatbotRuleSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  triggerType: z.enum(['keyword', 'first_message']).default('keyword'),
+  triggerValue: z.string().max(400).optional(),
+  responseText: z.string().trim().min(1).max(2000),
+})
 app.post('/api/chatbot/rules', { preHandler: authenticate }, async (request, reply) => {
   const scope = await chatbotScope(request, reply)
   if (!scope) return
   const parsed = chatbotRuleSchema.safeParse(request.body)
-  if (!parsed.success) return reply.code(400).send({ error: 'Regra do chatbot inválida.' })
+  if (!parsed.success) return reply.code(400).send({ error: 'Preencha o nome e a resposta do assunto.' })
   const input = parsed.data
-  const channel = await query<{ id: string }>(`SELECT c.id FROM whatsapp_channels c JOIN whatsapp_connections wc ON wc.channel_id = c.id WHERE c.id = $1 AND c.company_id = $2 AND wc.provider IN ('uazapi', 'evolution')`, [input.channelId, scope.companyId])
-  if (!channel.rows[0]) return reply.code(404).send({ error: 'Número WhatsApp não encontrado.' })
-  if (input.triggerType === 'keyword' && !input.triggerValue?.trim()) return reply.code(400).send({ error: 'Informe a palavra-chave da regra.' })
+  if (input.triggerType === 'keyword' && !splitKeywords(input.triggerValue ?? '').length) return reply.code(400).send({ error: 'Informe pelo menos uma palavra que o cliente costuma usar.' })
   const { rows } = await query(
     `INSERT INTO chatbot_rules (company_id, channel_id, name, trigger_type, trigger_value, response_text, position)
-     VALUES ($1, $2, $3, $4, $5, $6, (SELECT COALESCE(max(position), 0) + 1 FROM chatbot_rules WHERE company_id = $1))
-     RETURNING id, channel_id, name, trigger_type, trigger_value, response_text, is_active, position`, [scope.companyId, input.channelId, input.name, input.triggerType, input.triggerValue?.trim() ?? null, input.responseText],
+     VALUES ($1, NULL, $2, $3, $4, $5, (SELECT COALESCE(max(position), 0) + 1 FROM chatbot_rules WHERE company_id = $1))
+     RETURNING id, name, trigger_type, trigger_value, response_text, is_active, position`, [scope.companyId, input.name, input.triggerType, clean(input.triggerValue), input.responseText],
   )
   return reply.code(201).send(rows[0])
+})
+
+app.put('/api/chatbot/rules/:ruleId', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const params = z.object({ ruleId: z.string().uuid() }).safeParse(request.params)
+  const parsed = chatbotRuleSchema.partial().extend({ isActive: z.boolean().optional() }).safeParse(request.body)
+  if (!params.success || !parsed.success) return reply.code(400).send({ error: 'Assunto inválido.' })
+  const input = parsed.data
+  if (input.triggerValue !== undefined && !splitKeywords(input.triggerValue).length) return reply.code(400).send({ error: 'Informe pelo menos uma palavra que o cliente costuma usar.' })
+  const { rows } = await query(
+    `UPDATE chatbot_rules SET name = COALESCE($3, name), trigger_value = COALESCE($4, trigger_value), response_text = COALESCE($5, response_text), is_active = COALESCE($6, is_active), updated_at = now()
+     WHERE id = $1 AND company_id = $2 RETURNING id, name, trigger_type, trigger_value, response_text, is_active, position`,
+    [params.data.ruleId, scope.companyId, input.name ?? null, input.triggerValue === undefined ? null : clean(input.triggerValue), input.responseText ?? null, input.isActive ?? null],
+  )
+  if (!rows[0]) return reply.code(404).send({ error: 'Assunto não encontrado.' })
+  return rows[0]
 })
 
 app.delete('/api/chatbot/rules/:ruleId', { preHandler: authenticate }, async (request, reply) => {
@@ -974,6 +1086,31 @@ app.delete('/api/chatbot/rules/:ruleId', { preHandler: authenticate }, async (re
   if (!params.success) return reply.code(400).send({ error: 'Regra inválida.' })
   await query('DELETE FROM chatbot_rules WHERE id = $1 AND company_id = $2', [params.data.ruleId, scope.companyId])
   return reply.code(204).send()
+})
+
+// Simulador: mostra o que o bot responderia, inclusive com alterações ainda não salvas.
+app.post('/api/chatbot/test', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const scope = await chatbotScope(request, reply)
+  if (!scope) return
+  const parsed = z.object({ message: z.string().max(1000), firstMessage: z.boolean().default(false), at: z.string().datetime().optional(), draft: z.object(botSettingsFields).optional() }).safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Mensagem de teste inválida.' })
+  const saved = await loadBotSettings(scope.companyId)
+  const draft = parsed.data.draft ?? {}
+  const settings: BotSettings = {
+    ...saved,
+    is_active: true,
+    ...(draft.welcomeMessage !== undefined ? { welcome_message: clean(draft.welcomeMessage) } : {}),
+    ...(draft.fallbackMessage !== undefined ? { fallback_message: clean(draft.fallbackMessage) } : {}),
+    ...(draft.offHoursMessage !== undefined ? { off_hours_message: clean(draft.offHoursMessage) } : {}),
+    ...(draft.businessHours ? { business_hours: draft.businessHours } : {}),
+    ...(draft.botMode ? { bot_mode: draft.botMode } : {}),
+    ...(draft.catalog ? { catalog: draft.catalog } : {}),
+    ...(draft.priceRepliesEnabled !== undefined ? { price_replies_enabled: draft.priceRepliesEnabled } : {}),
+  }
+  const rules = (await loadBotRules(scope.companyId)).filter((rule) => rule.is_active)
+  const now = parsed.data.at ? new Date(parsed.data.at) : new Date()
+  const choice = chooseBotReply({ settings, rules, text: parsed.data.message, isFirstMessage: parsed.data.firstMessage, now })
+  return { reply: choice?.text ?? null, source: choice?.source ?? 'silent', ruleName: rules.find((rule) => rule.id === choice?.ruleId)?.name ?? null, withinHours: isWithinBusinessHours(settings.business_hours, now) }
 })
 
 const safeEqual = (a: string, b: string) => {
@@ -1033,12 +1170,22 @@ const saveWhatsAppMessage = async (connection: { id: string; company_id: string;
      ON CONFLICT (channel_id, external_id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, updated_at = now()
      RETURNING id`, [connection.company_id, connection.channel_id, contact.rows[0].id, remoteId, sentAt],
   )
+  const firstContent = record(message[Object.keys(message).find((name) => name !== 'messageContextInfo' && typeof message[name] === 'object') ?? ''])
+  const context = record(data.contextInfo ?? firstContent.contextInfo)
+  const quotedExternalId = typeof context.stanzaId === 'string' && context.stanzaId ? context.stanzaId : null
+  let quotedText = quotedExternalId ? pickText(context.quotedMessage) : null
+  let quotedFrom: 'customer' | 'us' | null = null
+  if (quotedExternalId) {
+    const original = await query<{ direction: string; body: string | null }>('SELECT direction, body FROM messages WHERE conversation_id = $1 AND external_id = $2', [conversation.rows[0].id, quotedExternalId])
+    if (original.rows[0]) { quotedFrom = original.rows[0].direction === 'outbound' ? 'us' : 'customer'; quotedText = original.rows[0].body ?? quotedText }
+  }
   const insertedMessage = await query<{ id: string }>(
-    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+    `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by, delivery_status, quoted_external_id, quoted_text, quoted_from)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)
      ON CONFLICT (conversation_id, external_id) DO NOTHING RETURNING id`,
-    [connection.company_id, conversation.rows[0].id, externalId, fromMe ? 'outbound' : 'inbound', messageType, body, sentAt, JSON.stringify(payload), fromMe ? null : 'customer'],
+    [connection.company_id, conversation.rows[0].id, externalId, fromMe ? 'outbound' : 'inbound', messageType, body, sentAt, JSON.stringify(payload), fromMe ? null : 'customer', fromMe ? 'sent' : null, quotedExternalId, quotedText?.slice(0, 500) ?? null, quotedFrom],
   )
+  if (insertedMessage.rows[0]) publishChat(connection.company_id, conversation.rows[0].id)
   return { inbound: !fromMe, isNew: Boolean(insertedMessage.rows[0]), body, phone, conversationId: conversation.rows[0].id, messageId: insertedMessage.rows[0]?.id ?? null, externalId, messageType, data }
 }
 
@@ -1070,7 +1217,7 @@ const BOT_PAUSE_AFTER_HUMAN = `now() + interval '12 hours'`
 
 type EvolutionConnection = { id: string; company_id: string; channel_id: string; provider: string; external_account_id: string | null; access_token_encrypted: string | null }
 
-const attachInboundMedia = async (connection: EvolutionConnection, incoming: { messageId: string | null; externalId: string; messageType: string; data: Record<string, unknown> }) => {
+const attachInboundMedia = async (connection: EvolutionConnection, incoming: { messageId: string | null; externalId: string; messageType: string; conversationId: string; data: Record<string, unknown> }) => {
   if (!incoming.messageId) return null
   const message = record(incoming.data.message)
   const kind = mediaKinds[incoming.messageType] ?? mediaKinds[Object.keys(message)[0] ?? '']
@@ -1087,14 +1234,16 @@ const attachInboundMedia = async (connection: EvolutionConnection, incoming: { m
   const mime = (mimeType ?? (kind === 'image' ? 'image/jpeg' : kind === 'audio' ? 'audio/ogg' : kind === 'video' ? 'video/mp4' : 'application/octet-stream')).trim()
   const path = await saveMediaFile(connection.company_id, base64.replace(/^data:[^;]+;base64,/, ''), mime, fileName)
   await query('UPDATE messages SET media_path = $2, media_mime = $3, media_name = $4, message_type = $5 WHERE id = $1', [incoming.messageId, path, mime, fileName, kind])
+  publishChat(connection.company_id, incoming.conversationId)
   if (kind !== 'audio' || !(await aiEnabledFor(connection.company_id))) return null
   const transcript = await transcribeAudio(Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64'), mime, fileName ?? 'audio.ogg').catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao transcrever áudio'); return null })
   if (!transcript) return null
   await query('UPDATE messages SET transcript = $2 WHERE id = $1', [incoming.messageId, transcript])
+  publishChat(connection.company_id, incoming.conversationId)
   return transcript
 }
 
-const handleHumanOnPhone = async (incoming: { messageId: string | null; externalId: string; conversationId: string }) => {
+const handleHumanOnPhone = async (companyId: string, incoming: { messageId: string | null; externalId: string; conversationId: string }) => {
   await new Promise((done) => setTimeout(done, 2500))
   if (wasApiMessage(incoming.externalId)) return
   if (incoming.messageId) {
@@ -1102,6 +1251,7 @@ const handleHumanOnPhone = async (incoming: { messageId: string | null; external
     if (!marked.rowCount) return
   }
   await query(`UPDATE conversations SET bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [incoming.conversationId])
+  publishChat(companyId, incoming.conversationId)
 }
 
 const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string }) => {
@@ -1110,20 +1260,18 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
   if (!connection.access_token_encrypted) return
   if (connection.provider === 'uazapi' && !serverUrl) return
   if (connection.provider === 'evolution' && !connection.external_account_id) return
-  const { rows: settingsRows } = await query<{ is_active: boolean; fallback_message: string | null }>('SELECT is_active, fallback_message FROM chatbot_settings WHERE company_id = $1', [connection.company_id])
-  const settings = settingsRows[0]
-  if (!settings?.is_active) return
+  const settings = await loadBotSettings(connection.company_id)
+  if (!settings.is_active) return
   const paused = await query<{ paused: boolean }>(`SELECT (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS paused FROM conversations WHERE id = $1`, [incoming.conversationId])
   if (paused.rows[0]?.paused) return
-  const [{ rows: countRows }, { rows: rules }] = await Promise.all([
+  const [{ rows: countRows }, rules] = await Promise.all([
     query<{ total: string }>(`SELECT count(*)::text AS total FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`, [incoming.conversationId]),
-    query<{ id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }>(`SELECT id, trigger_type, trigger_value, response_text FROM chatbot_rules WHERE company_id = $1 AND channel_id = $2 AND is_active = true ORDER BY position, created_at`, [connection.company_id, connection.channel_id]),
+    loadBotRules(connection.company_id).then((all) => all.filter((rule) => rule.is_active)),
   ])
-  const normalizedBody = foldText(incoming.body ?? '')
-  const rule = rules.find((item) => item.trigger_type === 'keyword' && item.trigger_value && normalizedBody.includes(foldText(item.trigger_value)))
-    ?? (Number(countRows[0]?.total ?? 0) === 1 ? rules.find((item) => item.trigger_type === 'first_message') : undefined)
-  const responseText = rule?.response_text ?? settings.fallback_message
-  if (!responseText?.trim()) return
+  const choice = chooseBotReply({ settings, rules, text: incoming.body ?? '', isFirstMessage: Number(countRows[0]?.total ?? 0) === 1 })
+  if (!choice) return
+  const responseText = choice.text
+  const rule = choice.ruleId ? { id: choice.ruleId } : undefined
   let sentExternalId: string | null = null
   if (connection.provider === 'evolution') {
     sentExternalId = evolutionMessageId(await evolutionSendText(connection.external_account_id!, decryptSecret(connection.access_token_encrypted), incoming.phone, responseText))
@@ -1144,6 +1292,7 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
     [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
   )
   scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA'))
+  publishChat(connection.company_id, incoming.conversationId)
 }
 
 const metaSignatureValid = (request: FastifyRequest) => {
@@ -1279,7 +1428,7 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
         const messageKeys = Object.keys(record(incoming.data.message))
         const isAudio = (mediaKinds[incoming.messageType] ?? mediaKinds[messageKeys.find((key) => key in mediaKinds) ?? '']) === 'audio'
         const media = attachInboundMedia(connection, incoming).catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'); return null })
-        if (!incoming.inbound) void handleHumanOnPhone(incoming).catch((error) => app.log.error({ error }, 'Falha ao pausar o chatbot'))
+        if (!incoming.inbound) void handleHumanOnPhone(connection.company_id, incoming).catch((error) => app.log.error({ error }, 'Falha ao pausar o chatbot'))
         if (incoming.inbound) {
           void (async () => {
             const body = incoming.body ?? (isAudio ? await media : null)
@@ -1287,6 +1436,22 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
           })().catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
         }
         void media.finally(() => scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA')))
+      }
+    } else if (event === 'messagesupdate') {
+      const updates = Array.isArray(payload.data) ? payload.data : [payload.data]
+      const statusMap: Record<string, 'sent' | 'delivered' | 'read' | 'failed'> = { SERVER_ACK: 'sent', DELIVERY_ACK: 'delivered', READ: 'read', PLAYED: 'read', ERROR: 'failed' }
+      for (const raw of updates) {
+        const item = record(raw)
+        const externalId = String(item.keyId ?? record(item.key).id ?? item.messageId ?? '')
+        const status = statusMap[String(item.status ?? record(item.update).status ?? '').toUpperCase()]
+        if (!externalId || !status) continue
+        const changed = await query<{ conversation_id: string }>(
+          `UPDATE messages SET delivery_status = $3::text WHERE company_id = $1 AND external_id = $2 AND direction = 'outbound'
+             AND CASE WHEN $3::text = 'failed' THEN delivery_status IS NULL OR delivery_status = 'sent'
+                      ELSE (CASE delivery_status WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 0 END) < (CASE $3::text WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 ELSE 3 END) END
+           RETURNING conversation_id`, [connection.company_id, externalId, status],
+        )
+        if (changed.rows[0]) publishChat(connection.company_id, changed.rows[0].conversation_id)
       }
     } else if (event === 'connectionupdate') {
       const state = String(data.state ?? data.status ?? '').toLowerCase()

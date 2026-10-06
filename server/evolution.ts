@@ -58,7 +58,7 @@ export const setEvolutionWebhook = (instanceName: string, instanceToken: string,
       url: callbackUrl,
       webhookByEvents: false,
       webhookBase64: false,
-      events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
+      events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'],
     },
   })
 
@@ -77,15 +77,17 @@ export const evolutionQr = async (instanceName: string, instanceToken: string) =
   return QRCode.toDataURL(code, { margin: 1, width: 320 })
 }
 
-export const evolutionSendText = (instanceName: string, instanceToken: string, number: string, text: string) =>
-  request(`/message/sendText/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, text })
+export type EvolutionQuote = { key: { remoteJid: string; fromMe: boolean; id: string }; message: { conversation: string } }
+
+export const evolutionSendText = (instanceName: string, instanceToken: string, number: string, text: string, quoted?: EvolutionQuote) =>
+  request(`/message/sendText/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, text, ...(quoted ? { quoted } : {}) })
 
 export const evolutionMessageId = (result: Json) => {
   const id = object(result.key).id
   return typeof id === 'string' && id ? id : null
 }
 
-export const evolutionSendMedia = (instanceName: string, instanceToken: string, number: string, media: { mediatype: 'image' | 'video' | 'document'; mimetype: string; base64: string; fileName: string; caption?: string }) =>
+export const evolutionSendMedia = (instanceName: string, instanceToken: string, number: string, media: { mediatype: 'image' | 'video' | 'document'; mimetype: string; base64: string; fileName: string; caption?: string; quoted?: EvolutionQuote }) =>
   request(`/message/sendMedia/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', {
     number,
     mediatype: media.mediatype,
@@ -93,10 +95,11 @@ export const evolutionSendMedia = (instanceName: string, instanceToken: string, 
     media: media.base64,
     fileName: media.fileName,
     ...(media.caption ? { caption: media.caption } : {}),
+    ...(media.quoted ? { quoted: media.quoted } : {}),
   })
 
-export const evolutionSendAudio = (instanceName: string, instanceToken: string, number: string, base64: string) =>
-  request(`/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, audio: base64, encoding: true })
+export const evolutionSendAudio = (instanceName: string, instanceToken: string, number: string, base64: string, quoted?: EvolutionQuote) =>
+  request(`/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { number, audio: base64, encoding: true, ...(quoted ? { quoted } : {}) })
 
 export const evolutionMediaBase64 = async (instanceName: string, instanceToken: string, messageId: string) => {
   const result = await request(`/chat/getBase64FromMediaMessage/${encodeURIComponent(instanceName)}`, instanceToken, 'POST', { message: { key: { id: messageId } }, convertToMp4: false })

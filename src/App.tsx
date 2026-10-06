@@ -36,6 +36,8 @@ import {
 import otimizaSymbol from './assets/otimiza-ai-symbol.png'
 import { api, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
+import { ChatbotPage } from './ChatbotPage'
+import { connectEvents, onChatEvent } from './lib/events'
 
 type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
@@ -188,7 +190,7 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?:
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'crm', label: 'CRM', icon: Target },
   { id: 'leads', label: 'Leads', icon: UsersRound },
-  { id: 'conversas', label: 'Conversas', icon: MessageCircleMore, badge: '12' },
+  { id: 'conversas', label: 'Conversas', icon: MessageCircleMore },
   { id: 'vendas', label: 'Vendas', icon: CircleDollarSign },
   { id: 'trafego', label: 'Tráfego pago', icon: TrendingUp },
   { id: 'relatorios', label: 'Relatórios', icon: BarChart3 },
@@ -333,7 +335,7 @@ function SalesPage({ sales, session, onRefresh }: { sales: SaleRow[]; session: S
   return <><section className="page-head"><div><span className="eyebrow">RECEITA</span><h1>Vendas</h1><p>Receita confirmada separada das vendas que a IA sinalizou para sua revisão.</p></div></section><section className="sales-summary"><article className="panel"><span>Receita confirmada</span><strong>{money(totals.confirmed)}</strong><small>{sales.filter((sale) => sale.status === 'confirmed').length} venda(s)</small></article><article className="panel"><span>Revisão da IA</span><strong>{money(totals.detected)}</strong><small>{sales.filter((sale) => sale.status === 'detected').length} venda(s) aguardando aprovação</small></article></section>{sales.some((sale) => sale.status === 'detected') && <section className="ai-review panel"><div><span className="eyebrow">REVISÃO DA IA</span><h2>Confirme o que entrou no faturamento</h2><p>A IA sinaliza uma possível venda; somente sua confirmação registra receita no dashboard.</p></div><div className="ai-review__items">{sales.filter((sale) => sale.status === 'detected').slice(0, 3).map((sale) => <article key={sale.id}><span><ClipboardCheck size={17}/></span><div><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda detectada'}</b><small>Valor identificado: {money(Number(sale.amount))}</small></div><button className="secondary-button" type="button" onClick={() => { void api.confirmSale(session, sale.id).then(onRefresh) }}>Confirmar</button></article>)}</div></section>}<section className="list-panel panel"><div className="list-toolbar"><b>Histórico de vendas</b><span>{sales.length} registro{sales.length === 1 ? '' : 's'}</span></div><div className="data-list">{sales.map((sale) => <div className="data-row data-row--static" key={sale.id}><span className={`sale-status sale-status--${sale.status}`}>{statusLabel[sale.status]}</span><span className="data-row__main"><b>{sale.contact_name ?? sale.opportunity_title ?? 'Venda sem contato'}</b><small>{sale.confirmed_at ? `Confirmada em ${new Date(sale.confirmed_at).toLocaleDateString('pt-BR')}` : sale.status === 'detected' ? 'Identificada pela IA · precisa de revisão' : 'Registrada no CRM'}</small></span><span className="data-row__value">{money(Number(sale.amount))}</span></div>)}{!sales.length && <div className="empty-list"><CircleDollarSign size={19}/><p>As vendas confirmadas aparecerão aqui.</p></div>}</div></section></>
 }
 
-type ConversationRow = { id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null }
+type ConversationRow = { id: string; status: 'open' | 'closed'; last_message_at: string | null; contact_name: string | null; phone: string; channel_name: string; last_message: string | null; last_direction: 'inbound' | 'outbound' | null; sent_at: string | null; bot_paused?: boolean; last_type?: string | null; unread_count?: number }
 
 function ConversationsPage({ conversations }: { conversations: ConversationRow[] }) {
   return <><section className="page-head"><div><span className="eyebrow">WHATSAPP CENTRALIZADO</span><h1>Conversas</h1><p>Consulte o histórico que chegou pelos números conectados.</p></div><span className="security-status"><ShieldCheck size={16}/> Somente leitura</span></section><section className="list-panel panel"><div className="list-toolbar"><b>Atendimentos recentes</b><span>{conversations.length} conversa{conversations.length === 1 ? '' : 's'}</span></div><div className="data-list">{conversations.map((conversation) => <article className="conversation-row" key={conversation.id}><Avatar initials={initialsFor(conversation.contact_name ?? conversation.phone)}/><div><b>{conversation.contact_name ?? conversation.phone}</b><p>{conversation.last_message ?? 'Nenhuma mensagem de texto disponível.'}</p><small>{conversation.channel_name} · {conversation.last_direction === 'outbound' ? 'Mensagem enviada' : 'Mensagem recebida'}</small></div><time>{conversation.sent_at ? new Date(conversation.sent_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</time></article>)}{!conversations.length && <div className="empty-list"><MessageCircleMore size={19}/><p>Conecte um número para começar a registrar conversas.</p></div>}</div></section></>
@@ -479,65 +481,6 @@ function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Sessi
       {error && <p className="form-error">{error}</p>}
     </>}
   </div>
-}
-
-type ChatbotData = Awaited<ReturnType<typeof api.chatbot>>
-
-function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrations }: { session: Session | null; account: { plan: string } | null; onRequestAccess: () => void; onOpenIntegrations: () => void }) {
-  const [data, setData] = useState<ChatbotData | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [channelName, setChannelName] = useState('Comercial')
-  const [phone, setPhone] = useState('')
-  const [serverUrl, setServerUrl] = useState('')
-  const [instance, setInstance] = useState('')
-  const [token, setToken] = useState('')
-  const [ruleName, setRuleName] = useState('Mensagem de boas-vindas')
-  const [ruleType, setRuleType] = useState<'keyword' | 'first_message'>('first_message')
-  const [keyword, setKeyword] = useState('')
-  const [response, setResponse] = useState('Olá! Como posso te ajudar?')
-  const [selectedChannelId, setSelectedChannelId] = useState('')
-  const load = async () => {
-    if (!session) return
-    setLoading(true); setError('')
-    try { const result = await api.chatbot(session); setData(result); setSelectedChannelId((current) => result.channels.some((channel) => channel.id === current) ? current : result.channels[0]?.id ?? '') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') } finally { setLoading(false) }
-  }
-  useEffect(() => { void load() }, [session])
-  if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar seu WhatsApp e criar regras para o chatbot.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16}/></button></section>
-  if (account?.plan !== 'chatbot') return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24}/></div><span className="eyebrow">PLANO CHATBOT</span><h1>Chatbot configurável por número.</h1><p>Crie respostas por palavra chave e mensagem inicial em canais Evolution ou UAZAPI.</p><button className="primary-button" type="button" onClick={() => setError('Solicite à equipe Otimiza AI a ativação do plano Chatbot para sua empresa.')}>Ativar plano Chatbot <ArrowRight size={16}/></button>{error && <p className="form-error">{error}</p>}</section>
-  const settings = data?.settings ?? { is_active: false, welcome_message: '', fallback_message: '', ai_enabled: false }
-  const saveSettings = async (event: FormEvent) => {
-    event.preventDefault(); if (!session || !settings) return
-    setLoading(true); setError('')
-    try { await api.saveChatbotSettings(session, { isActive: settings.is_active, welcomeMessage: settings.welcome_message ?? '', fallbackMessage: settings.fallback_message ?? '', aiEnabled: settings.ai_enabled }); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o chatbot.') } finally { setLoading(false) }
-  }
-  return <><section className="page-head chatbot-head"><div><span className="eyebrow">CHATBOT POR REGRAS</span><h1>Chatbot</h1><p>Configure respostas para cada número Evolution ou UAZAPI, sem precisar de IA.</p></div><span className={`security-status ${settings?.is_active ? '' : 'security-status--neutral'}`}><Bot size={16}/>{settings?.is_active ? 'Chatbot ativo' : 'Chatbot pausado'}</span></section>
-    {!data ? <section className="panel chatbot-loading">{loading ? 'Carregando configurações...' : error}</section> : <section className="chatbot-layout">
-      <article className="panel chatbot-panel chatbot-panel--settings"><div className="panel__header"><div><span className="eyebrow">NÚMERO E RESPOSTAS</span><h2>Configuração do chatbot</h2></div></div>
-        {!data.channels.length && <div className="chatbot-evolution-cta"><p>Conecte seu WhatsApp por QR Code usando a Evolution da Otimiza AI.</p><button className="primary-button" type="button" onClick={onOpenIntegrations}>Conectar com QR Code <ArrowRight size={16}/></button></div>}
-        {!data.channels.length ? <form className="form-stack chatbot-form" onSubmit={async (event) => { event.preventDefault(); setLoading(true); setError(''); try { const result = await api.connectWhatsapp(session, { provider: 'uazapi', channelName, phoneNumber: phone || undefined, externalAccountId: instance, serverUrl, accessToken: token }); if (result.setupError) setError(result.setupError); await load(); setToken('') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível conectar a UAZAPI.') } finally { setLoading(false) } }}><p className="chatbot-intro">Conecte uma instância UAZAPI. O CRM guarda o token de forma criptografada e configura o webhook automaticamente.</p><label>Nome do canal<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required placeholder="Ex.: Comercial"/></label><label>Número do WhatsApp <small>opcional</small><input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="5585999999999"/></label><label>Server URL da UAZAPI<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} type="url" required placeholder="https://sua-api.exemplo.com"/></label><label>Nome da instância<input value={instance} onChange={(event) => setInstance(event.target.value)} required placeholder="Ex.: comercial-principal"/></label><label>Token da instância<input value={token} onChange={(event) => setToken(event.target.value)} minLength={10} required type="password" placeholder="Token da UAZAPI"/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Conectando...' : 'Conectar número UAZAPI'} <Link2 size={16}/></button></form> : <><div className="chatbot-channels">{data.channels.map((channel) => <div key={channel.id}><span className="connection-dot"/><span><b>{channel.name}</b><small>{channel.phone_number ?? 'Número em conexão'} · {channel.status}</small></span></div>)}</div><form className="form-stack chatbot-form" onSubmit={saveSettings}><label className="checkbox-field"><input type="checkbox" checked={settings.is_active} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, is_active: event.target.checked } } : current)}/><span>Ativar respostas automáticas</span></label><label className="checkbox-field"><input type="checkbox" checked={settings.ai_enabled} disabled={!data.aiAvailable} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, ai_enabled: event.target.checked } } : current)}/><span>Inteligência artificial (GPT)<small>{data.aiAvailable ? ' Transcreve áudios e atualiza etapa, valor e origem dos leads pela conversa. O texto das conversas é enviado à OpenAI; avise seus clientes (LGPD).' : ' Indisponível: a chave da OpenAI ainda não foi configurada no servidor.'}</small></span></label><label>Mensagem de boas-vindas<textarea value={settings.welcome_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, welcome_message: event.target.value } } : current)} placeholder="Olá! Escolha uma opção para continuar."/></label><label>Resposta padrão <small>quando nenhuma regra for encontrada</small><textarea value={settings.fallback_message ?? ''} onChange={(event) => setData((current) => current ? { ...current, settings: { ...current.settings, fallback_message: event.target.value } } : current)} placeholder="Não entendi. Digite MENU para ver as opções."/></label><button className="primary-button" type="submit" disabled={loading}>{loading ? 'Salvando...' : 'Salvar configuração'} <CheckCircle2 size={16}/></button></form></>}
-      </article>
-      <article className="panel chatbot-panel">
-        <div className="panel__header"><div><span className="eyebrow">REGRAS DE RESPOSTA</span><h2>Mensagens automáticas</h2></div><span className="count-pill">{data.rules.length}</span></div>
-        {data.channels.length ? <>
-          <form className="chatbot-rule-form" onSubmit={async (event) => {
-            event.preventDefault(); setLoading(true); setError('')
-            try {
-              await api.createChatbotRule(session, { channelId: selectedChannelId || data.channels[0].id, name: ruleName, triggerType: ruleType, triggerValue: ruleType === 'keyword' ? keyword : undefined, responseText: response })
-              setKeyword(''); setResponse(''); await load()
-            } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar a regra.') } finally { setLoading(false) }
-          }}>
-            <label>Número do WhatsApp<select value={selectedChannelId || data.channels[0].id} onChange={(event) => setSelectedChannelId(event.target.value)}>{data.channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name} · {channel.provider === 'evolution' ? 'Evolution' : 'UAZAPI'}</option>)}</select></label>
-            <label>Nome da regra<input value={ruleName} onChange={(event) => setRuleName(event.target.value)} required/></label>
-            <label>Quando<select value={ruleType} onChange={(event) => setRuleType(event.target.value as 'keyword' | 'first_message')}><option value="first_message">Receber a primeira mensagem</option><option value="keyword">Encontrar uma palavra-chave</option></select></label>
-            {ruleType === 'keyword' && <label>Palavra-chave<input value={keyword} onChange={(event) => setKeyword(event.target.value)} required placeholder="Ex.: preços"/></label>}
-            <label>Resposta<textarea value={response} onChange={(event) => setResponse(event.target.value)} required placeholder="Mensagem que será enviada"/></label>
-            <button className="primary-button" type="submit" disabled={loading}>Adicionar regra <Plus size={16}/></button>
-          </form>
-          <div className="chatbot-rules">{data.rules.map((rule) => <article key={rule.id}><div><span className="rule-trigger">{data.channels.find((channel) => channel.id === rule.channel_id)?.name ?? 'Número'} · {rule.trigger_type === 'keyword' ? `Palavra: ${rule.trigger_value}` : 'Primeira mensagem'}</span><b>{rule.name}</b><p>{rule.response_text}</p></div><button type="button" onClick={() => { void api.deleteChatbotRule(session, rule.id).then(load).catch((reason) => setError(reason instanceof Error ? reason.message : 'Não foi possível remover a regra.')) }} aria-label={`Remover ${rule.name}`}><X size={16}/></button></article>)}{!data.rules.length && <p className="chatbot-empty">Crie a primeira regra para começar.</p>}</div>
-        </> : <p className="chatbot-empty">Conecte um número Evolution ou UAZAPI para criar regras.</p>}
-      </article>
-    </section>}{error && data && <p className="form-error chatbot-error">{error}</p>}</>
 }
 
 function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
@@ -828,9 +771,24 @@ export default function App() {
 
   useEffect(() => {
     if (!session || page !== 'crm') return
-    const interval = window.setInterval(() => { void loadWorkspace(session).catch(() => undefined) }, 10_000)
-    return () => window.clearInterval(interval)
+    const refresh = () => { void loadWorkspace(session).catch(() => undefined) }
+    const interval = window.setInterval(refresh, 30_000)
+    let pending: number | undefined
+    // Mensagem nova no WhatsApp: atualiza os cards logo, sem esperar o próximo ciclo (e sem disparar várias vezes seguidas).
+    const unsubscribe = onChatEvent(() => { window.clearTimeout(pending); pending = window.setTimeout(refresh, 1500) })
+    return () => { window.clearInterval(interval); window.clearTimeout(pending); unsubscribe() }
   }, [session, page])
+
+  useEffect(() => {
+    connectEvents(session)
+    if (!session) return
+    const refresh = () => { void api.conversations(session).then(setConversations).catch(() => undefined) }
+    const unsubscribe = onChatEvent(refresh)
+    const interval = window.setInterval(refresh, 60_000)
+    return () => { unsubscribe(); window.clearInterval(interval) }
+  }, [session])
+
+  const unreadTotal = conversations.reduce((total, conversation) => total + (conversation.unread_count ?? 0), 0)
 
   const authenticateSession = (nextSession: Session, isNew = false) => {
     localStorage.setItem('otimiza-crm-session', JSON.stringify(nextSession))
@@ -934,7 +892,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name">otimiza <b>AI</b></div></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account.company_name)}</span><span><b>{account.company_name}</b><small>{account.access_state === 'trial' ? 'Teste gratuito' : `Plano ${account.plan}`}</small></span><ChevronDown size={16}/></button>
-        <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button>)}</nav>
+        <nav className="navigation" aria-label="Navegação principal">{navItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
       </aside>
       <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : navItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
