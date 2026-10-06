@@ -280,10 +280,10 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
           <div className="chart" aria-label="Gráfico de faturamento crescente">
             <div className="chart__grid" />
             <svg viewBox="0 0 680 208" preserveAspectRatio="none" role="img">
-              <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#9ee8ce" stopOpacity="0.7"/><stop offset="100%" stopColor="#9ee8ce" stopOpacity="0"/></linearGradient></defs>
+              <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#a69cff" stopOpacity="0.52"/><stop offset="100%" stopColor="#a69cff" stopOpacity="0"/></linearGradient></defs>
               <path d="M0 184 C48 174 58 145 94 151 S151 168 187 133 S235 144 273 112 S323 128 358 91 S408 110 442 80 S507 98 542 48 S588 70 625 36 S658 47 680 12 L680 208 L0 208 Z" fill="url(#chartFill)" />
-              <path d="M0 184 C48 174 58 145 94 151 S151 168 187 133 S235 144 273 112 S323 128 358 91 S408 110 442 80 S507 98 542 48 S588 70 625 36 S658 47 680 12" fill="none" stroke="#157a61" strokeWidth="3" strokeLinecap="round" />
-              <circle cx="625" cy="36" r="5" fill="#157a61" stroke="#fffdf7" strokeWidth="3" />
+              <path d="M0 184 C48 174 58 145 94 151 S151 168 187 133 S235 144 273 112 S323 128 358 91 S408 110 442 80 S507 98 542 48 S588 70 625 36 S658 47 680 12" fill="none" stroke="#655ce0" strokeWidth="3" strokeLinecap="round" />
+              <circle cx="625" cy="36" r="5" fill="#655ce0" stroke="#fffdf7" strokeWidth="3" />
             </svg>
           </div>
           <div className="chart-axis"><span>01 set.</span><span>08 set.</span><span>15 set.</span><span>22 set.</span><span>30 set.</span></div>
