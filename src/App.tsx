@@ -212,15 +212,15 @@ function Avatar({ initials, small = false }: { initials: string; small?: boolean
   return <span className={`avatar ${small ? 'avatar--small' : ''}`}>{initials}</span>
 }
 
-const leadInterest: Record<Lead['temperature'], { label: string; description: string }> = {
-  Quente: { label: 'Alta intenção', description: 'Demonstrou forte intenção de compra' },
-  Morno: { label: 'Em avaliação', description: 'Ainda está avaliando a proposta' },
-  Novo: { label: 'Novo contato', description: 'Chegou recentemente e ainda precisa ser qualificado' },
+const leadInterest: Record<Lead['temperature'], { emoji: string; description: string }> = {
+  Quente: { emoji: '🔥', description: 'Demonstrou forte intenção de compra' },
+  Morno: { emoji: '🌤️', description: 'Ainda está avaliando a proposta' },
+  Novo: { emoji: '✨', description: 'Chegou recentemente e ainda precisa ser qualificado' },
 }
 
 function LeadInterest({ temperature }: { temperature: Lead['temperature'] }) {
   const interest = leadInterest[temperature]
-  return <span className={`temperature temperature--${temperature.toLowerCase()}`} title={`Interesse do lead: ${interest.label}. ${interest.description}`}><i aria-hidden="true"/>{interest.label}</span>
+  return <span className={`temperature temperature--${temperature.toLowerCase()}`} title={`Temperatura do lead: ${temperature}. ${interest.description}`}><span className="temperature__emoji" aria-hidden="true">{interest.emoji}</span>{temperature}</span>
 }
 
 function WhatsAppIcon({ size = 16 }: { size?: number }) {

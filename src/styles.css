@@ -469,7 +469,7 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 
 /* Interesse do lead, com linguagem comercial direta. */
 .temperature { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 8px; line-height: 1; white-space: nowrap; }
-.temperature i { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: currentColor; }
+.temperature__emoji { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 10px; line-height: 1; }
 
 @media (max-width: 1180px) {
   .kanban-scroll-guide { justify-content: flex-start; }
