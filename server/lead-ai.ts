@@ -13,7 +13,7 @@ const mediaLabel = (type: string) => {
 export const aiEnabledFor = async (companyId: string) => {
   if (!openaiConfigured()) return false
   const { rows } = await query<{ enabled: boolean }>(
-    `SELECT (c.plan = 'chatbot' AND COALESCE(s.ai_enabled, false)) AS enabled
+    `SELECT (c.plan = 'chatbot' AND COALESCE(s.ai_enabled, true)) AS enabled
      FROM companies c LEFT JOIN chatbot_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId],
   )
   return Boolean(rows[0]?.enabled)

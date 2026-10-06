@@ -299,8 +299,8 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step"><Sparkles size={14} /></span><div><h2>Inteligência artificial (GPT) <small className="bot-optional">opcional</small></h2><p>Entende áudios dos clientes e organiza seus leads sozinha: etapa do funil, valor e origem.</p></div></div>
-          <Toggle checked={form.ai} onChange={(value) => update({ ai: value })} label={form.ai ? 'IA ligada' : 'IA desligada'} hint={aiAvailable ? 'O texto das conversas é enviado à OpenAI. Avise seus clientes (LGPD).' : 'Indisponível: a chave da OpenAI ainda não foi configurada no servidor.'} />
+          <div className="bot-card__head"><span className="bot-step"><Sparkles size={14} /></span><div><h2>Inteligência artificial (GPT) <small className="bot-optional">recomendado</small></h2><p>Faz o bot entender os áudios dos clientes (ele responde ao que foi dito) e organiza seus leads sozinha: etapa do funil, valor e origem.</p></div></div>
+          <Toggle checked={form.ai} onChange={(value) => update({ ai: value })} label={form.ai ? 'IA ligada' : 'IA desligada: o bot não entende áudios'} hint={aiAvailable ? 'O texto das conversas e a transcrição dos áudios são enviados à OpenAI. Avise seus clientes (LGPD). Só desligue se não quiser usar este recurso.' : 'Ligada, mas ainda não funciona: falta configurar a chave da OpenAI no servidor.'} />
         </section>
       </div>
 

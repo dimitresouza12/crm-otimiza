@@ -977,7 +977,7 @@ type BotSettingsRow = BotSettings & { ai_enabled: boolean }
 
 const emptyBotSettings: BotSettingsRow = {
   is_active: false, welcome_message: '', fallback_message: '', off_hours_message: '', business_hours: defaultBusinessHours,
-  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: false,
+  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true,
 }
 
 const loadBotSettings = async (companyId: string): Promise<BotSettingsRow> => {
@@ -1031,7 +1031,7 @@ app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, r
   const input = parsed.data
   const { rows } = await query(
     `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, false))
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true))
      ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, off_hours_message = EXCLUDED.off_hours_message,
        business_hours = COALESCE($6::jsonb, chatbot_settings.business_hours), bot_mode = COALESCE($7::text, chatbot_settings.bot_mode), catalog = COALESCE($8::jsonb, chatbot_settings.catalog),
        price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), updated_at = now()

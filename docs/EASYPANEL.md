@@ -40,7 +40,7 @@ O comando da imagem executa a migração do banco antes de iniciar a aplicação
 
 ### IA (opcional, plano Chatbot)
 
-Com `OPENAI_API_KEY` definida, cada empresa do plano Chatbot pode ligar **Inteligência artificial (GPT)** em *Chatbot → Configuração*. Com a opção ligada:
+Com `OPENAI_API_KEY` definida, a **Inteligência artificial (GPT)** do plano Chatbot funciona. Ela vem **ligada por padrão** e cada empresa pode desligá-la em *Chatbot → Configuração*. Enquanto ligada:
 
 - áudios recebidos são transcritos e a transcrição alimenta as regras do chatbot;
 - cerca de 20 segundos depois da última mensagem, o GPT lê a conversa e atualiza etapa (só avança), temperatura, valor e origem do lead;
