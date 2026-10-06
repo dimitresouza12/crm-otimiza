@@ -443,3 +443,5 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 
 /* Cores compartilhadas por todo o app (antes só existiam na landing) */
 :root { --ink: #20253a; --muted: #687187; --line: #e4e7ef; --paper: #fff; --lavender: #7669ef; --lavender-deep: #302762; --mint: #2fbd9a; }
+
+.chat-msg__who--agent { color: var(--lavender-deep); }

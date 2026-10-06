@@ -85,3 +85,22 @@ test('sem nada configurado o bot fica em silêncio', () => {
   const empty = { ...settings, welcome_message: null, fallback_message: null, off_hours_message: null, catalog: [] }
   assert.equal(chooseBotReply({ settings: empty, rules: [], text: 'oi', isFirstMessage: true, now: open }), null)
 })
+
+test('uma palavra do nome do item basta para achar o preço', () => {
+  const reply = chooseBotReply({ settings, rules, text: 'vocês têm algum combo?', isFirstMessage: false, now: open })
+  assert.equal(reply?.source, 'price')
+  assert.equal(reply?.text, '• Combo corte + barba: R$ 60,00')
+})
+
+test('nome inteiro do item tem prioridade sobre palavra solta', () => {
+  assert.equal(chooseBotReply({ settings, rules, text: 'quanto é o corte?', isFirstMessage: false, now: open })?.text, '• Corte: R$ 40,00 — na tesoura ou máquina')
+})
+
+test('entre dois assuntos vence o de palavra mais específica', () => {
+  const topics: BotRule[] = [
+    { id: 'hours', trigger_type: 'keyword', trigger_value: 'horário, funcionamento', response_text: 'Abrimos às 9h.' },
+    { id: 'booking', trigger_type: 'keyword', trigger_value: 'agendar, horário disponível', response_text: 'Vamos agendar!' },
+  ]
+  assert.equal(chooseBotReply({ settings, rules: topics, text: 'tem horário disponível sexta?', isFirstMessage: false, now: open })?.ruleId, 'booking')
+  assert.equal(chooseBotReply({ settings, rules: topics, text: 'qual o horário?', isFirstMessage: false, now: open })?.ruleId, 'hours')
+})

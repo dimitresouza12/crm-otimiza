@@ -68,10 +68,10 @@ const outsideHoursInstant = (form: Form) => {
 }
 
 const topicTemplates = [
-  { label: 'Horário de funcionamento', name: 'Horário de funcionamento', keywords: 'horário, que horas abre, que horas fecha, funcionamento, abre, fecha', answer: 'Atendemos de segunda a sexta, das 9h às 18h, e aos sábados das 9h às 13h.' },
+  { label: 'Horário de funcionamento', name: 'Horário de funcionamento', keywords: 'que horas, horário de funcionamento, horário de atendimento, funcionamento, abre, fecha, aberto', answer: 'Atendemos de segunda a sexta, das 9h às 18h, e aos sábados das 9h às 13h.' },
   { label: 'Endereço', name: 'Endereço', keywords: 'endereço, onde fica, localização, como chegar', answer: 'Estamos na Rua Exemplo, 100 - Centro. Ponto de referência: ao lado da praça.' },
   { label: 'Formas de pagamento', name: 'Formas de pagamento', keywords: 'pix, cartão, dinheiro, pagamento, forma de pagamento', answer: 'Aceitamos Pix, cartão de crédito e débito e dinheiro.' },
-  { label: 'Agendamento', name: 'Agendamento', keywords: 'agendar, marcar, reservar, disponibilidade', answer: 'Para agendar, me diga o dia e o horário que prefere e já deixo reservado para você.' },
+  { label: 'Agendamento', name: 'Agendamento', keywords: 'agendar, marcar, reservar, disponibilidade, horário disponível, vaga', answer: 'Para agendar, me diga o dia e o horário que prefere e já deixo reservado para você.' },
   { label: 'Promoções', name: 'Promoções', keywords: 'promoção, desconto, oferta, cupom', answer: 'Temos uma condição especial esta semana! Me chame que passo os detalhes.' },
   { label: 'Outro assunto', name: '', keywords: '', answer: '' },
 ]

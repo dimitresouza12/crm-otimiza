@@ -280,6 +280,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
                 <button className="chat-msg__reply" type="button" aria-label="Responder esta mensagem" title="Responder" onClick={() => { setReplyTo(message); textArea.current?.focus() }}><Reply size={13} /></button>
                 {author === 'bot' && <span className="chat-msg__who"><Bot size={11} /> Chatbot</span>}
                 {author === 'phone' && <span className="chat-msg__who">Pelo celular</span>}
+                {author === 'agent' && <span className="chat-msg__who chat-msg__who--agent">Atendente</span>}
                 {message.quoted_text && <div className={`chat-quote chat-quote--${message.quoted_from === 'us' ? 'us' : 'customer'}`}><b>{message.quoted_from === 'us' ? 'Você' : 'Cliente'}</b><span>{message.quoted_text}</span></div>}
                 {kind !== 'text' && <MessageMedia session={session} message={message} kind={kind} onOpenImage={setLightbox} />}
                 {message.body && <p>{message.body}</p>}
