@@ -196,7 +196,7 @@ app.get('/api/dashboard', { preHandler: authenticate }, async (request, reply) =
     `SELECT
        COALESCE((SELECT sum(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed'), 0)::text AS confirmed_revenue,
        (SELECT count(*) FROM sales WHERE company_id = $1 AND status = 'confirmed')::text AS confirmed_sales,
-       (SELECT count(*) FROM opportunities WHERE company_id = $1)::text AS open_leads,
+       (SELECT count(*) FROM opportunities o JOIN pipeline_stages ps ON ps.id = o.stage_id WHERE o.company_id = $1 AND ps.kind = 'open')::text AS open_leads,
        COALESCE((SELECT avg(amount) FROM sales WHERE company_id = $1 AND status = 'confirmed'), 0)::text AS average_ticket,
        (SELECT count(*) FROM contacts WHERE company_id = $1 AND first_seen_at >= date_trunc('month', now()))::text AS leads_this_month`, [scope.companyId],
   )

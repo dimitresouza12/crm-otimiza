@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import {
   Activity,
   ArrowRight,
@@ -12,7 +12,9 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Clock3,
+  ArrowUpRight,
   Eye,
+  Receipt,
   EyeOff,
   Filter,
   Goal,
@@ -198,10 +200,18 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?:
 
 const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot', icon: Bot }
 
-function MetricCard({ title, value, trend, emphasis, tone }: { title: string; value: string; trend: string; emphasis?: boolean; tone?: 'revenue' | 'pipeline' | 'leads' | 'ticket' }) {
+function MetricCard({ title, value, trend, emphasis, tone, onOpen }: { title: string; value: string; trend: string; emphasis?: boolean; tone?: 'revenue' | 'pipeline' | 'leads' | 'ticket'; onOpen?: () => void }) {
+  const interactive = onOpen ? {
+    role: 'button' as const,
+    tabIndex: 0,
+    'aria-haspopup': 'dialog' as const,
+    'aria-label': `${title}: ${value}. Abrir detalhes`,
+    onClick: onOpen,
+    onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } },
+  } : {}
   return (
-    <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''} ${tone ? `metric-card--${tone}` : ''}`}>
-      <div className="metric-card__top"><span>{title}</span><MoreHorizontal size={18} /></div>
+    <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''} ${tone ? `metric-card--${tone}` : ''} ${onOpen ? 'metric-card--clickable' : ''}`} {...interactive}>
+      <div className="metric-card__top"><span>{title}</span>{onOpen ? <ArrowUpRight className="metric-card__open" size={17} aria-hidden="true" /> : <MoreHorizontal size={18} />}</div>
       <strong>{value}</strong>
       <p><TrendingUp size={14} /> {trend} <span>vs. mês anterior</span></p>
     </article>
@@ -245,8 +255,127 @@ function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead:
   )
 }
 
+type MetricKind = 'revenue' | 'pipeline' | 'leads' | 'ticket'
+type MetricRow = { label: string; sub?: string; value: string; share?: number }
+type MetricDetail = {
+  kind: MetricKind
+  eyebrow: string
+  title: string
+  value: string
+  definition: string
+  how: string
+  stats: Array<{ label: string; value: string }>
+  sections: Array<{ title: string; empty: string; rows: MetricRow[] }>
+  note?: string
+  cta: { label: string; page: Page }
+}
+type DashboardMetrics = { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }
+
+const metricIcons: Record<MetricKind, typeof Target> = { revenue: CircleDollarSign, pipeline: Target, leads: UsersRound, ticket: Receipt }
+
+// Monta o conteúdo do card de detalhes. Respeita o botão "ocultar números" do Dashboard.
+function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { metrics?: DashboardMetrics; leads: Lead[]; sales: SaleRow[]; hide: boolean }): MetricDetail {
+  const mask = (value: string) => hide ? '••••' : value
+  const m = (value: number) => mask(money(value))
+  const sum = (rows: SaleRow[]) => rows.reduce((total, sale) => total + Number(sale.amount), 0)
+  const confirmed = sales.filter((sale) => sale.status === 'confirmed')
+  const detected = sales.filter((sale) => sale.status === 'detected')
+  const dateOf = (sale: SaleRow) => new Date(sale.confirmed_at ?? sale.created_at)
+  const saleName = (sale: SaleRow) => sale.contact_name ?? sale.opportunity_title ?? 'Venda sem contato'
+  const openStages: Stage[] = stages.filter((stage) => stage !== 'Ganhos' && stage !== 'Perdidos')
+  const openLeads = leads.filter((lead) => openStages.includes(lead.stage))
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
+
+  if (kind === 'revenue') {
+    return {
+      kind, eyebrow: 'FATURAMENTO', title: 'Receita confirmada', value: m(metrics?.confirmedRevenue ?? 0),
+      definition: 'Tudo o que já foi confirmado como venda e entrou de verdade no seu faturamento.',
+      how: 'Soma de todas as vendas com status Confirmada. Só você confirma uma venda; a IA apenas sinaliza as possíveis. O total é acumulado desde o início, não só do mês.',
+      stats: [{ label: 'Vendas confirmadas', value: mask(String(confirmed.length)) }, { label: 'Ticket médio', value: m(metrics?.averageTicket ?? 0) }, { label: 'Em revisão pela IA', value: m(sum(detected)) }],
+      sections: [{
+        title: 'Últimas vendas confirmadas', empty: 'Nenhuma venda confirmada ainda. Quando você confirmar a primeira, ela aparece aqui.',
+        rows: [...confirmed].sort((a, b) => dateOf(b).getTime() - dateOf(a).getTime()).slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)) })),
+      }],
+      note: detected.length ? `Há ${m(sum(detected))} em ${hide ? '••••' : plural(detected.length, 'venda', 'vendas')} esperando sua revisão. Esse valor só vira receita depois que você confirmar.` : undefined,
+      cta: { label: 'Abrir Vendas', page: 'vendas' },
+    }
+  }
+
+  if (kind === 'pipeline') {
+    const potential = openLeads.reduce((total, lead) => total + (lead.value ?? 0), 0)
+    return {
+      kind, eyebrow: 'FUNIL DE VENDAS', title: 'Em negociação', value: mask(`${openLeads.length} ${openLeads.length === 1 ? 'lead' : 'leads'}`),
+      definition: 'Leads que ainda estão em atendimento no funil: não fecharam e também não foram perdidos.',
+      how: 'Conta os leads das etapas Novos leads, Qualificados, Proposta enviada e Negociação. Ganhos e Perdidos ficam de fora.',
+      stats: [{ label: 'Valor em jogo', value: m(potential) }, { label: 'Leads quentes', value: mask(String(openLeads.filter((lead) => lead.temperature === 'Quente').length)) }, { label: 'Sem valor definido', value: mask(String(openLeads.filter((lead) => !lead.value).length)) }],
+      sections: [
+        { title: 'Por etapa do funil', empty: 'Nenhum lead em andamento.', rows: openStages.map((stage) => { const inStage = openLeads.filter((lead) => lead.stage === stage); return { label: stage, sub: m(inStage.reduce((total, lead) => total + (lead.value ?? 0), 0)), value: mask(String(inStage.length)), share: openLeads.length ? Math.round((inStage.length / openLeads.length) * 100) : 0 } }) },
+        { title: 'Maiores oportunidades', empty: 'Defina o valor dos leads para ver as maiores oportunidades.', rows: [...openLeads].filter((lead) => lead.value).sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).slice(0, 3).map((lead) => ({ label: lead.name, sub: lead.stage, value: m(lead.value ?? 0) })) },
+      ],
+      cta: { label: 'Abrir CRM', page: 'crm' },
+    }
+  }
+
+  if (kind === 'leads') {
+    const bySource = Array.from(leads.reduce((acc, lead) => acc.set(lead.source, (acc.get(lead.source) ?? 0) + 1), new Map<string, number>()).entries()).sort((a, b) => b[1] - a[1])
+    const byHeat = (['Quente', 'Morno', 'Novo'] as const).map((temperature) => ({ temperature, count: leads.filter((lead) => lead.temperature === temperature).length }))
+    return {
+      kind, eyebrow: 'NOVOS CONTATOS', title: 'Novos leads', value: mask(String(metrics?.leadsThisMonth ?? 0)),
+      definition: 'Pessoas que falaram com você pela primeira vez neste mês.',
+      how: 'Conta contatos novos desde o dia 1 do mês, tanto os que chegaram pelo WhatsApp quanto os cadastrados à mão.',
+      stats: [{ label: 'Neste mês', value: mask(String(metrics?.leadsThisMonth ?? 0)) }, { label: 'Total no CRM', value: mask(String(leads.length)) }, { label: 'Principal origem', value: bySource[0]?.[0] ?? '—' }],
+      sections: [
+        { title: 'De onde vieram', empty: 'As origens aparecem quando entrarem os primeiros leads.', rows: bySource.slice(0, 5).map(([source, count]) => ({ label: source, sub: plural(count, 'lead', 'leads'), value: mask(`${Math.round((count / Math.max(leads.length, 1)) * 100)}%`), share: Math.round((count / Math.max(leads.length, 1)) * 100) })) },
+        { title: 'Interesse dos leads', empty: 'Sem leads ainda.', rows: leads.length ? byHeat.map(({ temperature, count }) => ({ label: `${leadInterest[temperature].emoji} ${temperature}`, sub: leadInterest[temperature].description, value: mask(String(count)), share: Math.round((count / Math.max(leads.length, 1)) * 100) })) : [] },
+      ],
+      cta: { label: 'Ver Leads', page: 'leads' },
+    }
+  }
+
+  const biggest = [...confirmed].sort((a, b) => Number(b.amount) - Number(a.amount))
+  return {
+    kind, eyebrow: 'VENDAS', title: 'Ticket médio', value: m(metrics?.averageTicket ?? 0),
+    definition: 'Quanto cada venda confirmada rende, em média.',
+    how: 'Receita confirmada dividida pelo número de vendas confirmadas.',
+    stats: [{ label: 'Receita confirmada', value: m(metrics?.confirmedRevenue ?? 0) }, { label: 'Vendas confirmadas', value: mask(String(confirmed.length)) }, { label: 'Maior venda', value: m(Number(biggest[0]?.amount ?? 0)) }],
+    sections: [{
+      title: 'Vendas que formam a média', empty: 'Ainda não há vendas confirmadas. Quando você confirmar a primeira, a média aparece aqui.',
+      rows: biggest.slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)), share: Math.round((Number(sale.amount) / Math.max(Number(biggest[0]?.amount ?? 1), 1)) * 100) })),
+    }],
+    cta: { label: 'Abrir Vendas', page: 'vendas' },
+  }
+}
+
+function MetricDetailModal({ detail, onClose, onNavigate }: { detail: MetricDetail; onClose: () => void; onNavigate: (page: Page) => void }) {
+  const Icon = metricIcons[detail.kind]
+  return (
+    <Modal onClose={onClose} label={detail.title} wide>
+      <header className="modal__header metric-detail__header">
+        <span className={`metric-detail__badge metric-detail__badge--${detail.kind}`} aria-hidden="true"><Icon size={19} /></span>
+        <div><span className="eyebrow">{detail.eyebrow}</span><h2>{detail.title}</h2></div>
+        <button type="button" onClick={onClose} aria-label="Fechar detalhes"><X size={18} /></button>
+      </header>
+      <div className="metric-detail__hero"><strong>{detail.value}</strong><p>{detail.definition}</p></div>
+      <dl className="metric-detail__stats">{detail.stats.map((stat) => <div key={stat.label}><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}</dl>
+      {detail.note && <p className="metric-detail__note"><ClipboardCheck size={15} aria-hidden="true" />{detail.note}</p>}
+      {detail.sections.map((section) => (
+        <section className="metric-detail__section" key={section.title}>
+          <h3>{section.title}</h3>
+          {section.rows.length ? <ul>{section.rows.map((row) => <li key={`${row.label}-${row.sub ?? ''}`}><div><b>{row.label}</b>{row.sub && <small>{row.sub}</small>}{row.share !== undefined && <i className="metric-detail__bar" aria-hidden="true"><em style={{ width: `${Math.min(Math.max(row.share, 2), 100)}%` }} /></i>}</div><span>{row.value}</span></li>)}</ul> : <p className="metric-detail__empty">{section.empty}</p>}
+        </section>
+      ))}
+      <details className="metric-detail__how"><summary>Como esse número é calculado</summary><p>{detail.how}</p></details>
+      <footer className="metric-detail__footer">
+        <button className="secondary-button" type="button" onClick={onClose}>Fechar</button>
+        <button className="primary-button" type="button" onClick={() => { onClose(); onNavigate(detail.cta.page) }}>{detail.cta.label} <ArrowRight size={16} /></button>
+      </footer>
+    </Modal>
+  )
+}
+
 function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
   const [areValuesVisible, setAreValuesVisible] = useState(true)
+  const [openMetric, setOpenMetric] = useState<MetricKind | null>(null)
   const revenue = metrics?.confirmedRevenue ?? 0
   const confirmedSales = metrics?.confirmedSales ?? 0
   const openLeads = metrics?.openLeads ?? 0
@@ -271,11 +400,12 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
         <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button></div>
       </section>
       <section className="metric-grid">
-        <MetricCard title="Receita confirmada" value={showMoney(revenue)} trend={areValuesVisible ? `${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}` : 'Vendas confirmadas'} emphasis tone="revenue" />
-        <MetricCard title="Em negociação" value={areValuesVisible ? `${openLeads} leads` : '••••'} trend="Acompanhe no funil" tone="pipeline" />
-        <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram neste mês" tone="leads" />
-        <MetricCard title="Ticket médio" value={showMoney(averageTicket)} trend="Receita confirmada" tone="ticket" />
+        <MetricCard title="Receita confirmada" value={showMoney(revenue)} trend={areValuesVisible ? `${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}` : 'Vendas confirmadas'} emphasis tone="revenue" onOpen={() => setOpenMetric('revenue')} />
+        <MetricCard title="Em negociação" value={areValuesVisible ? `${openLeads} leads` : '••••'} trend="Acompanhe no funil" tone="pipeline" onOpen={() => setOpenMetric('pipeline')} />
+        <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram neste mês" tone="leads" onOpen={() => setOpenMetric('leads')} />
+        <MetricCard title="Ticket médio" value={showMoney(averageTicket)} trend="Receita confirmada" tone="ticket" onOpen={() => setOpenMetric('ticket')} />
       </section>
+      {openMetric && <MetricDetailModal detail={buildMetricDetail(openMetric, { metrics, leads, sales, hide: !areValuesVisible })} onClose={() => setOpenMetric(null)} onNavigate={onNavigate} />}
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
           <div className="panel__header"><div><span className="eyebrow">RECEITA ATRIBUÍDA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button">Ver relatório <ArrowRight size={16} /></button></div>
@@ -571,8 +701,33 @@ function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Sessi
   </div>
 }
 
-function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
-  return <div className="modal-layer" role="dialog" aria-modal="true"><button className="modal-layer__backdrop" type="button" aria-label="Fechar" onClick={onClose}/><section className="modal">{children}</section></div>
+function Modal({ children, onClose, label, wide = false }: { children: ReactNode; onClose: () => void; label?: string; wide?: boolean }) {
+  const panel = useRef<HTMLElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const node = panel.current
+    if (!node) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusable = () => [...node.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])')].filter((element) => element.offsetParent !== null)
+    // Formulário: foca o primeiro campo. Diálogo informativo: foca o próprio diálogo, para o leitor de tela ler o título primeiro.
+    const initial = node.querySelector<HTMLElement>('[autofocus], input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? node
+    initial.focus({ preventScroll: true })
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(); return }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) { event.preventDefault(); node.focus(); return }
+      const first = items[0], last = items[items.length - 1]
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = overflow; previous?.focus?.({ preventScroll: true }) }
+  }, [])
+  return <div className="modal-layer" role="dialog" aria-modal="true" aria-label={label}><button className="modal-layer__backdrop" type="button" aria-label="Fechar" tabIndex={-1} onClick={onClose}/><section className={`modal ${wide ? 'modal--wide' : ''}`} ref={panel} tabIndex={-1}>{children}</section></div>
 }
 
 function LeadForm({ onClose, onSave }: { onClose: () => void; onSave: (input: { name: string; phone: string; source: string; estimatedValue?: number }) => Promise<void> }) {

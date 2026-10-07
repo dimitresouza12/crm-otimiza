@@ -532,3 +532,37 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 /* Logo vetorial (SVG): nunca cortar o símbolo e sempre desenhar nítido, em qualquer densidade de tela */
 .brand-mark img { object-fit: contain; }
 .brand-mark img, .landing-brand__mark img { image-rendering: auto; }
+
+/* Cards de indicadores clicáveis + modal de detalhes */
+.metric-card--clickable { cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; -webkit-tap-highlight-color: transparent; }
+.metric-card--clickable:hover { transform: translateY(-2px); box-shadow: 0 14px 28px rgba(49, 40, 130, .16); }
+.metric-card--clickable:active { transform: translateY(0); }
+.metric-card--clickable:focus-visible { outline: 3px solid var(--lavender); outline-offset: 3px; }
+.metric-card__open { opacity: .65; transition: opacity .16s ease, transform .16s ease; }
+.metric-card--clickable:hover .metric-card__open, .metric-card--clickable:focus-visible .metric-card__open { opacity: 1; transform: translate(2px, -2px); }
+@media (prefers-reduced-motion: reduce) { .metric-card--clickable, .metric-card__open { transition: none; } .metric-card--clickable:hover { transform: none; } .metric-card--clickable:hover .metric-card__open { transform: none; } }
+
+.modal--wide { width: min(100%, 580px); max-height: min(88vh, 760px); overflow-y: auto; overscroll-behavior: contain; }
+.modal:focus { outline: 0; }
+.modal button:focus-visible, .modal summary:focus-visible, .modal input:focus-visible, .modal textarea:focus-visible { outline: 3px solid var(--lavender); outline-offset: 2px; }
+.metric-detail__header { align-items: center; margin-bottom: 14px; }.metric-detail__header > div { flex: 1; min-width: 0; }.metric-detail__header h2 { margin-top: 4px; }
+.metric-detail__badge { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; color: #fff; border-radius: 12px; }
+.metric-detail__badge--revenue { background: linear-gradient(135deg, #302762, #5144b8); }.metric-detail__badge--pipeline { background: linear-gradient(135deg, #7669ef, #5c50c9); }
+.metric-detail__badge--leads { color: var(--lavender-deep); background: #ece9ff; }.metric-detail__badge--ticket { color: var(--lavender-deep); background: #e4e1ff; }
+.metric-detail__hero { display: grid; gap: 6px; margin-bottom: 14px; }.metric-detail__hero strong { color: var(--ink); font-size: 34px; letter-spacing: -1.6px; line-height: 1.05; }
+.metric-detail__hero p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.metric-detail__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
+.metric-detail__stats div { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfbfe; }
+.metric-detail__stats dt { color: var(--muted); font-size: 11px; }.metric-detail__stats dd { margin: 0; overflow: hidden; color: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: -.4px; text-overflow: ellipsis; white-space: nowrap; }
+.metric-detail__note { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 14px; padding: 10px 12px; color: #7a5600; border-radius: 10px; background: #fff4d6; font-size: 12px; line-height: 1.45; }.metric-detail__note svg { flex: 0 0 auto; margin-top: 1px; }
+.metric-detail__section { margin-bottom: 14px; }.metric-detail__section h3 { margin: 0 0 8px; color: var(--ink); font-size: 13px; }
+.metric-detail__section ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.metric-detail__section li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.metric-detail__section li > div { display: grid; flex: 1; min-width: 0; gap: 2px; }.metric-detail__section li b { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.metric-detail__section li small { color: var(--muted); font-size: 11px; }.metric-detail__section li > span { color: var(--ink); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.metric-detail__bar { display: block; height: 4px; margin-top: 4px; overflow: hidden; border-radius: 99px; background: #eceef5; }.metric-detail__bar em { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #877cff, #5144ba); }
+.metric-detail__empty { margin: 0; padding: 12px; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; font-size: 12px; line-height: 1.45; }
+.metric-detail__how { margin: 0 0 16px; border-top: 1px solid var(--line); padding-top: 12px; }.metric-detail__how summary { color: var(--lavender-deep); font-size: 12px; font-weight: 600; cursor: pointer; }
+.metric-detail__how p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.metric-detail__footer { position: sticky; bottom: -22px; display: flex; justify-content: flex-end; gap: 8px; margin: 0 -22px -22px; padding: 14px 22px; border-top: 1px solid var(--line); background: #fff; border-radius: 0 0 16px 16px; }
+@media (max-width: 560px) { .modal--wide { max-height: 92vh; } .metric-detail__stats { grid-template-columns: 1fr; } .metric-detail__hero strong { font-size: 30px; } .metric-detail__footer { flex-direction: column-reverse; } .metric-detail__footer button { width: 100%; justify-content: center; } }
