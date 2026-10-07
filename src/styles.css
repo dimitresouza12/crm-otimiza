@@ -577,3 +577,18 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .kanban-column--spotlight { animation: stage-spotlight 2.8s ease-out; box-shadow: 0 0 0 3px var(--lavender), 0 14px 32px rgba(118, 105, 239, .28); }
 @keyframes stage-spotlight { 0%, 65% { box-shadow: 0 0 0 3px var(--lavender), 0 14px 32px rgba(118, 105, 239, .28); } 100% { box-shadow: 0 0 0 0 rgba(118, 105, 239, 0); } }
 @media (prefers-reduced-motion: reduce) { .metric-detail__go, .metric-detail__section li.is-link { transition: none; } .kanban-column--spotlight { animation: none; } }
+
+/* Landing no celular: nada pode ficar cortado.
+   Uma coluna "1fr" não encolhe abaixo do conteúdo; com a demonstração do Kanban (3 colunas fixas) ela alargava o cartão
+   inteiro e o título, o texto e a 3ª coluna eram cortados. Agora a coluna pode encolher e a demonstração rola para o lado. */
+@media (max-width: 900px) {
+  .landing-feature-card, .landing-feature-card--revenue, .landing-origin, .landing-faq { grid-template-columns: minmax(0, 1fr); }
+  .landing-feature-card > *, .landing-origin > *, .landing-faq > * { min-width: 0; }
+  .landing-kanban-demo > div { overflow-x: auto; overflow-y: hidden; padding-bottom: 12px; scroll-snap-type: x proximity; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  .landing-kanban-demo section { scroll-snap-align: start; }
+}
+/* O link "Entrar" sumia no celular: quem já é cliente não achava onde entrar. */
+@media (max-width: 620px) {
+  .landing-login { display: inline-flex; padding: 0 6px; font-size: 13px; }
+  .landing-header__actions { gap: 6px; }
+}
