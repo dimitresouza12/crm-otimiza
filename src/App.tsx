@@ -256,7 +256,8 @@ function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead:
 }
 
 type MetricKind = 'revenue' | 'pipeline' | 'leads' | 'ticket'
-type MetricRow = { label: string; sub?: string; value: string; share?: number }
+type MetricAction = { kind: 'lead'; lead: Lead } | { kind: 'stage'; stage: Stage } | { kind: 'page'; page: Page } | { kind: 'search'; text: string }
+type MetricRow = { label: string; sub?: string; value: string; share?: number; action?: MetricAction; hint?: string }
 type MetricDetail = {
   kind: MetricKind
   eyebrow: string
@@ -294,7 +295,7 @@ function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { 
       stats: [{ label: 'Vendas confirmadas', value: mask(String(confirmed.length)) }, { label: 'Ticket médio', value: m(metrics?.averageTicket ?? 0) }, { label: 'Em revisão pela IA', value: m(sum(detected)) }],
       sections: [{
         title: 'Últimas vendas confirmadas', empty: 'Nenhuma venda confirmada ainda. Quando você confirmar a primeira, ela aparece aqui.',
-        rows: [...confirmed].sort((a, b) => dateOf(b).getTime() - dateOf(a).getTime()).slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)) })),
+        rows: [...confirmed].sort((a, b) => dateOf(b).getTime() - dateOf(a).getTime()).slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)), action: { kind: 'page' as const, page: 'vendas' as const }, hint: 'Ver em Vendas' })),
       }],
       note: detected.length ? `Há ${m(sum(detected))} em ${hide ? '••••' : plural(detected.length, 'venda', 'vendas')} esperando sua revisão. Esse valor só vira receita depois que você confirmar.` : undefined,
       cta: { label: 'Abrir Vendas', page: 'vendas' },
@@ -309,8 +310,8 @@ function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { 
       how: 'Conta os leads das etapas Novos leads, Qualificados, Proposta enviada e Negociação. Ganhos e Perdidos ficam de fora.',
       stats: [{ label: 'Valor em jogo', value: m(potential) }, { label: 'Leads quentes', value: mask(String(openLeads.filter((lead) => lead.temperature === 'Quente').length)) }, { label: 'Sem valor definido', value: mask(String(openLeads.filter((lead) => !lead.value).length)) }],
       sections: [
-        { title: 'Por etapa do funil', empty: 'Nenhum lead em andamento.', rows: openStages.map((stage) => { const inStage = openLeads.filter((lead) => lead.stage === stage); return { label: stage, sub: m(inStage.reduce((total, lead) => total + (lead.value ?? 0), 0)), value: mask(String(inStage.length)), share: openLeads.length ? Math.round((inStage.length / openLeads.length) * 100) : 0 } }) },
-        { title: 'Maiores oportunidades', empty: 'Defina o valor dos leads para ver as maiores oportunidades.', rows: [...openLeads].filter((lead) => lead.value).sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).slice(0, 3).map((lead) => ({ label: lead.name, sub: lead.stage, value: m(lead.value ?? 0) })) },
+        { title: 'Por etapa do funil', empty: 'Nenhum lead em andamento.', rows: openStages.map((stage) => { const inStage = openLeads.filter((lead) => lead.stage === stage); return { label: stage, sub: m(inStage.reduce((total, lead) => total + (lead.value ?? 0), 0)), value: mask(String(inStage.length)), share: openLeads.length ? Math.round((inStage.length / openLeads.length) * 100) : 0, action: { kind: 'stage' as const, stage }, hint: `Ver a etapa ${stage} no CRM` } }) },
+        { title: 'Maiores oportunidades', empty: 'Defina o valor dos leads para ver as maiores oportunidades.', rows: [...openLeads].filter((lead) => lead.value).sort((a, b) => (b.value ?? 0) - (a.value ?? 0)).slice(0, 3).map((lead) => ({ label: lead.name, sub: lead.stage, value: m(lead.value ?? 0), action: { kind: 'lead' as const, lead }, hint: 'Abrir o lead' })) },
       ],
       cta: { label: 'Abrir CRM', page: 'crm' },
     }
@@ -325,8 +326,8 @@ function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { 
       how: 'Conta contatos novos desde o dia 1 do mês, tanto os que chegaram pelo WhatsApp quanto os cadastrados à mão.',
       stats: [{ label: 'Neste mês', value: mask(String(metrics?.leadsThisMonth ?? 0)) }, { label: 'Total no CRM', value: mask(String(leads.length)) }, { label: 'Principal origem', value: bySource[0]?.[0] ?? '—' }],
       sections: [
-        { title: 'De onde vieram', empty: 'As origens aparecem quando entrarem os primeiros leads.', rows: bySource.slice(0, 5).map(([source, count]) => ({ label: source, sub: plural(count, 'lead', 'leads'), value: mask(`${Math.round((count / Math.max(leads.length, 1)) * 100)}%`), share: Math.round((count / Math.max(leads.length, 1)) * 100) })) },
-        { title: 'Interesse dos leads', empty: 'Sem leads ainda.', rows: leads.length ? byHeat.map(({ temperature, count }) => ({ label: `${leadInterest[temperature].emoji} ${temperature}`, sub: leadInterest[temperature].description, value: mask(String(count)), share: Math.round((count / Math.max(leads.length, 1)) * 100) })) : [] },
+        { title: 'De onde vieram', empty: 'As origens aparecem quando entrarem os primeiros leads.', rows: bySource.slice(0, 5).map(([source, count]) => ({ label: source, sub: plural(count, 'lead', 'leads'), value: mask(`${Math.round((count / Math.max(leads.length, 1)) * 100)}%`), share: Math.round((count / Math.max(leads.length, 1)) * 100), action: { kind: 'search' as const, text: source }, hint: `Ver leads de ${source}` })) },
+        { title: 'Interesse dos leads', empty: 'Sem leads ainda.', rows: leads.length ? byHeat.map(({ temperature, count }) => ({ label: `${leadInterest[temperature].emoji} ${temperature}`, sub: leadInterest[temperature].description, value: mask(String(count)), share: Math.round((count / Math.max(leads.length, 1)) * 100), action: { kind: 'page' as const, page: 'leads' as const }, hint: 'Ver leads' })) : [] },
       ],
       cta: { label: 'Ver Leads', page: 'leads' },
     }
@@ -340,13 +341,13 @@ function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { 
     stats: [{ label: 'Receita confirmada', value: m(metrics?.confirmedRevenue ?? 0) }, { label: 'Vendas confirmadas', value: mask(String(confirmed.length)) }, { label: 'Maior venda', value: m(Number(biggest[0]?.amount ?? 0)) }],
     sections: [{
       title: 'Vendas que formam a média', empty: 'Ainda não há vendas confirmadas. Quando você confirmar a primeira, a média aparece aqui.',
-      rows: biggest.slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)), share: Math.round((Number(sale.amount) / Math.max(Number(biggest[0]?.amount ?? 1), 1)) * 100) })),
+      rows: biggest.slice(0, 5).map((sale) => ({ label: saleName(sale), sub: `Confirmada em ${dateOf(sale).toLocaleDateString('pt-BR')}`, value: m(Number(sale.amount)), share: Math.round((Number(sale.amount) / Math.max(Number(biggest[0]?.amount ?? 1), 1)) * 100), action: { kind: 'page' as const, page: 'vendas' as const }, hint: 'Ver em Vendas' })),
     }],
     cta: { label: 'Abrir Vendas', page: 'vendas' },
   }
 }
 
-function MetricDetailModal({ detail, onClose, onNavigate }: { detail: MetricDetail; onClose: () => void; onNavigate: (page: Page) => void }) {
+function MetricDetailModal({ detail, onClose, onNavigate, onAction }: { detail: MetricDetail; onClose: () => void; onNavigate: (page: Page) => void; onAction: (action: MetricAction) => void }) {
   const Icon = metricIcons[detail.kind]
   return (
     <Modal onClose={onClose} label={detail.title} wide>
@@ -361,7 +362,14 @@ function MetricDetailModal({ detail, onClose, onNavigate }: { detail: MetricDeta
       {detail.sections.map((section) => (
         <section className="metric-detail__section" key={section.title}>
           <h3>{section.title}</h3>
-          {section.rows.length ? <ul>{section.rows.map((row) => <li key={`${row.label}-${row.sub ?? ''}`}><div><b>{row.label}</b>{row.sub && <small>{row.sub}</small>}{row.share !== undefined && <i className="metric-detail__bar" aria-hidden="true"><em style={{ width: `${Math.min(Math.max(row.share, 2), 100)}%` }} /></i>}</div><span>{row.value}</span></li>)}</ul> : <p className="metric-detail__empty">{section.empty}</p>}
+          {section.rows.length ? <ul>{section.rows.map((row) => {
+            const content = <><div><b>{row.label}</b>{row.sub && <small>{row.sub}</small>}{row.share !== undefined && <i className="metric-detail__bar" aria-hidden="true"><em style={{ width: `${Math.min(Math.max(row.share, 2), 100)}%` }} /></i>}</div><span>{row.value}</span></>
+            const key = `${row.label}-${row.sub ?? ''}`
+            const action = row.action
+            return action
+              ? <li className="is-link" key={key}><button type="button" title={row.hint} aria-label={`${row.label}: ${row.value}. ${row.hint ?? 'Abrir'}`} onClick={() => onAction(action)}>{content}<ChevronRight className="metric-detail__go" size={16} aria-hidden="true" /></button></li>
+              : <li key={key}>{content}</li>
+          })}</ul> : <p className="metric-detail__empty">{section.empty}</p>}
         </section>
       ))}
       <details className="metric-detail__how"><summary>Como esse número é calculado</summary><p>{detail.how}</p></details>
@@ -373,7 +381,7 @@ function MetricDetailModal({ detail, onClose, onNavigate }: { detail: MetricDeta
   )
 }
 
-function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: Page) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
+function Dashboard({ onNavigate, onOpenLead, onFocusStage, onSearchLeads, metrics, leads, sales }: { onNavigate: (page: Page) => void; onOpenLead: (lead: Lead) => void; onFocusStage: (stage: Stage) => void; onSearchLeads: (text: string) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
   const [areValuesVisible, setAreValuesVisible] = useState(true)
   const [openMetric, setOpenMetric] = useState<MetricKind | null>(null)
   const revenue = metrics?.confirmedRevenue ?? 0
@@ -405,7 +413,7 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
         <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram neste mês" tone="leads" onOpen={() => setOpenMetric('leads')} />
         <MetricCard title="Ticket médio" value={showMoney(averageTicket)} trend="Receita confirmada" tone="ticket" onOpen={() => setOpenMetric('ticket')} />
       </section>
-      {openMetric && <MetricDetailModal detail={buildMetricDetail(openMetric, { metrics, leads, sales, hide: !areValuesVisible })} onClose={() => setOpenMetric(null)} onNavigate={onNavigate} />}
+      {openMetric && <MetricDetailModal detail={buildMetricDetail(openMetric, { metrics, leads, sales, hide: !areValuesVisible })} onClose={() => setOpenMetric(null)} onNavigate={onNavigate} onAction={(action) => { setOpenMetric(null); if (action.kind === 'page') onNavigate(action.page); else if (action.kind === 'lead') onOpenLead(action.lead); else if (action.kind === 'stage') onFocusStage(action.stage); else onSearchLeads(action.text) }} />}
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
           <div className="panel__header"><div><span className="eyebrow">RECEITA ATRIBUÍDA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button">Ver relatório <ArrowRight size={16} /></button></div>
@@ -438,7 +446,19 @@ function Dashboard({ onNavigate, metrics, leads, sales }: { onNavigate: (page: P
   )
 }
 
-function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, onOpenChat }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void; onOpenChat?: (lead: Lead) => void; onMoveLead: (leadId: Lead['id'], stage: Stage) => void }) {
+function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, onOpenChat, focusStage, onFocusHandled }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void; onOpenChat?: (lead: Lead) => void; onMoveLead: (leadId: Lead['id'], stage: Stage) => void; focusStage?: Stage | null; onFocusHandled?: () => void }) {
+  const [spotlight, setSpotlight] = useState<Stage | null>(null)
+  useEffect(() => {
+    if (!focusStage) return
+    document.querySelector<HTMLElement>(`.kanban-column[data-stage="${focusStage}"]`)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', inline: 'center', block: 'nearest' })
+    setSpotlight(focusStage)
+    onFocusHandled?.()
+  }, [focusStage])
+  useEffect(() => {
+    if (!spotlight) return
+    const timer = window.setTimeout(() => setSpotlight(null), 2800)
+    return () => window.clearTimeout(timer)
+  }, [spotlight])
   const [draggingId, setDraggingId] = useState<Lead['id'] | null>(null)
   const [overStage, setOverStage] = useState<Stage | null>(null)
   const [search, setSearch] = useState('')
@@ -462,7 +482,8 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
           const columnLeads = visible.filter((lead) => lead.stage === stage)
           const total = columnLeads.reduce((sum, lead) => sum + (lead.value ?? 0), 0)
           return <article
-            className={`kanban-column column-${index + 1}${overStage === stage ? ' kanban-column--over' : ''}`}
+            className={`kanban-column column-${index + 1}${overStage === stage ? ' kanban-column--over' : ''}${spotlight === stage ? ' kanban-column--spotlight' : ''}`}
+            data-stage={stage}
             key={stage}
             onDragOver={(event) => { if (draggingId === null) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (overStage !== stage) setOverStage(stage) }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOverStage((current) => current === stage ? null : current) }}
@@ -480,8 +501,8 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
   )
 }
 
-function LeadsPage({ leads, onSelectLead, onAddLead }: { leads: Lead[]; onSelectLead: (lead: Lead) => void; onAddLead: () => void }) {
-  const [search, setSearch] = useState('')
+function LeadsPage({ leads, onSelectLead, onAddLead, initialSearch = '' }: { leads: Lead[]; onSelectLead: (lead: Lead) => void; onAddLead: () => void; initialSearch?: string }) {
+  const [search, setSearch] = useState(initialSearch)
   const visible = leads.filter((lead) => `${lead.name} ${lead.source}`.toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR')))
   return <><section className="page-head crm-head"><div><span className="eyebrow">BASE DE CONTATOS</span><h1>Leads</h1><p>Todos os contatos que entraram no seu processo comercial.</p></div><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18}/> Novo lead</button></section><section className="list-panel panel"><div className="list-toolbar"><div className="search-box"><Search size={17}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar nome ou origem"/></div><span>{visible.length} contato{visible.length === 1 ? '' : 's'}</span></div><div className="data-list">{visible.map((lead) => <button type="button" className="data-row" onClick={() => onSelectLead(lead)} key={lead.id}><Avatar initials={lead.initials}/><span className="data-row__main"><b>{lead.name}</b><small>{lead.lastMessage}</small></span><span className="data-row__source">{lead.source}</span><LeadInterest temperature={lead.temperature}/><span className="data-row__value">{lead.value ? money(lead.value) : 'Sem valor'}</span><ChevronRight size={17}/></button>)}{!visible.length && <div className="empty-list"><UsersRound size={19}/><p>Nenhum lead encontrado.</p></div>}</div></section></>
 }
@@ -911,6 +932,8 @@ export default function App() {
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [focusStage, setFocusStage] = useState<Stage | null>(null)
+  const [leadsSearch, setLeadsSearch] = useState('')
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
@@ -1116,9 +1139,9 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (page === 'dashboard') return <Dashboard onNavigate={setPage} metrics={metrics} leads={leads} sales={sales} />
-    if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} onMoveLead={moveLead} onOpenChat={session ? openLeadChat : undefined} />
-    if (page === 'leads') return <LeadsPage leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
+    if (page === 'dashboard') return <Dashboard onNavigate={setPage} onOpenLead={(lead) => { setSelectedLead(lead); setPage('crm') }} onFocusStage={(stage) => { setFocusStage(stage); setPage('crm') }} onSearchLeads={(text) => { setLeadsSearch(text); setPage('leads') }} metrics={metrics} leads={leads} sales={sales} />
+    if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} onMoveLead={moveLead} onOpenChat={session ? openLeadChat : undefined} focusStage={focusStage} onFocusHandled={() => setFocusStage(null)} />
+    if (page === 'leads') return <LeadsPage key={leadsSearch} initialSearch={leadsSearch} leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return session ? <ChatPage session={session} initial={conversations} botEnabled={account?.plan === 'chatbot'} /> : <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales} session={session!} onRefresh={() => loadWorkspace(session!)}/>
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />

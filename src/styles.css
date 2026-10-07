@@ -566,3 +566,14 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .metric-detail__how p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .metric-detail__footer { position: sticky; bottom: -22px; display: flex; justify-content: flex-end; gap: 8px; margin: 0 -22px -22px; padding: 14px 22px; border-top: 1px solid var(--line); background: #fff; border-radius: 0 0 16px 16px; }
 @media (max-width: 560px) { .modal--wide { max-height: 92vh; } .metric-detail__stats { grid-template-columns: 1fr; } .metric-detail__hero strong { font-size: 30px; } .metric-detail__footer { flex-direction: column-reverse; } .metric-detail__footer button { width: 100%; justify-content: center; } }
+
+/* Linhas clicáveis do modal de detalhes + destaque de coluna do kanban */
+.metric-detail__section li.is-link { padding: 0; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+.metric-detail__section li.is-link:hover { border-color: #b9b2f0; background: #faf9ff; box-shadow: 0 4px 12px rgba(91, 79, 200, .1); }
+.metric-detail__section li.is-link > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 9px 12px; color: inherit; text-align: left; border: 0; border-radius: 10px; background: transparent; font: inherit; cursor: pointer; }
+.metric-detail__section li.is-link > button > div { display: grid; flex: 1; min-width: 0; gap: 2px; }.metric-detail__section li.is-link > button > span { color: var(--ink); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.metric-detail__go { flex: 0 0 auto; color: #9aa0b4; transition: transform .15s ease, color .15s ease; }.metric-detail__section li.is-link:hover .metric-detail__go, .metric-detail__section li.is-link > button:focus-visible .metric-detail__go { color: var(--lavender-deep); transform: translateX(2px); }
+.metric-detail__section li.is-link > button:focus-visible { outline: 3px solid var(--lavender); outline-offset: -2px; }
+.kanban-column--spotlight { animation: stage-spotlight 2.8s ease-out; box-shadow: 0 0 0 3px var(--lavender), 0 14px 32px rgba(118, 105, 239, .28); }
+@keyframes stage-spotlight { 0%, 65% { box-shadow: 0 0 0 3px var(--lavender), 0 14px 32px rgba(118, 105, 239, .28); } 100% { box-shadow: 0 0 0 0 rgba(118, 105, 239, 0); } }
+@media (prefers-reduced-motion: reduce) { .metric-detail__go, .metric-detail__section li.is-link { transition: none; } .kanban-column--spotlight { animation: none; } }
