@@ -524,3 +524,7 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .ai-review__more { color: var(--muted); font-size: 10px; text-align: center; }
 @media (max-width: 1180px) { .sales-grid { grid-template-columns: 1fr; } .sales-grid .sales-bars { height: 190px; } }
 @media (max-width: 620px) { .sales-grid .ai-review__items article { grid-template-columns: 29px minmax(0, 1fr); } .sales-grid .ai-review__items .secondary-button { grid-column: 2; justify-self: start; } }
+
+/* Marca do menu: "CRM" como expoente de "AI" (otimiza AI^CRM) */
+.brand-name { align-items: flex-start; }
+.brand-name em { position: static; align-self: flex-start; margin: -1px 0 0 2px; color: #716cff; font: 800 8.5px/1 'Sora', ui-sans-serif, sans-serif; letter-spacing: .06em; font-style: normal; }
