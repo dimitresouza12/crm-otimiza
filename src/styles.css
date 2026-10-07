@@ -510,3 +510,17 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .metric-card--leads { border-color: #dedbff; background: linear-gradient(135deg, #f5f3ff, #eeedff); }.metric-card--leads .metric-card__top { color: #766de0; }.metric-card--leads strong { color: #48408e; }.metric-card--leads p { color: #259c7c; }.metric-card--leads p span { color: #7d8492; }
 .metric-card--ticket { border-color: #ddd9ff; background: linear-gradient(135deg, #f8f7ff, #f0eeff); }.metric-card--ticket .metric-card__top { color: #756dde; }.metric-card--ticket strong { color: #413a87; }.metric-card--ticket p { color: #259c7c; }.metric-card--ticket p span { color: #7d8492; }
 .revenue-panel .chart-summary span { color: #6359d7; background: #eeecff; }
+
+/* Vendas: aproveita a largura da tela. Resumo em 3 colunas e gráfico + revisão da IA lado a lado. */
+.sales-summary { max-width: none; }
+.sales-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1fr); gap: 14px; margin-bottom: 14px; align-items: stretch; }
+.sales-grid--single { grid-template-columns: 1fr; }
+.sales-grid .sales-overview { display: flex; flex-direction: column; max-width: none; margin: 0; }
+.sales-grid .sales-bars { height: 250px; }
+.sales-grid .ai-review { grid-template-columns: 1fr; align-content: start; gap: 16px; margin: 0; }
+.sales-grid .ai-review h2 { font-size: 16px; }.sales-grid .ai-review p { font-size: 11px; }
+.sales-grid .ai-review__items article { grid-template-columns: 31px minmax(0, 1fr) auto; padding: 10px; }
+.sales-grid .ai-review__items b { font-size: 12px; }.sales-grid .ai-review__items small { font-size: 10px; }
+.ai-review__more { color: var(--muted); font-size: 10px; text-align: center; }
+@media (max-width: 1180px) { .sales-grid { grid-template-columns: 1fr; } .sales-grid .sales-bars { height: 190px; } }
+@media (max-width: 620px) { .sales-grid .ai-review__items article { grid-template-columns: 29px minmax(0, 1fr); } .sales-grid .ai-review__items .secondary-button { grid-column: 2; justify-self: start; } }
