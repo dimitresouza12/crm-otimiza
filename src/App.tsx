@@ -33,7 +33,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import otimizaSymbol from './assets/otimiza-ai-symbol.png'
+import otimizaSymbol from './assets/otimiza-ai-symbol.svg'
 import { api, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'

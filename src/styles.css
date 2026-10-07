@@ -528,3 +528,7 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 /* Marca do menu: "CRM" como expoente de "AI" (otimiza AI^CRM) */
 .brand-name { align-items: flex-start; }
 .brand-name em { position: static; align-self: flex-start; margin: -1px 0 0 2px; color: #716cff; font: 800 8.5px/1 'Sora', ui-sans-serif, sans-serif; letter-spacing: .06em; font-style: normal; }
+
+/* Logo vetorial (SVG): nunca cortar o símbolo e sempre desenhar nítido, em qualquer densidade de tela */
+.brand-mark img { object-fit: contain; }
+.brand-mark img, .landing-brand__mark img { image-rendering: auto; }
