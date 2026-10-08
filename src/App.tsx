@@ -223,8 +223,8 @@ function Avatar({ initials, small = false }: { initials: string; small?: boolean
 }
 
 const leadInterest: Record<Lead['temperature'], { label: string; description: string }> = {
-  Quente: { label: 'Prioridade alta', description: 'Demonstrou forte intenção de compra' },
-  Morno: { label: 'Em avaliação', description: 'Ainda está avaliando a proposta' },
+  Quente: { label: 'Prioritário', description: 'Demonstrou forte intenção de compra' },
+  Morno: { label: 'Em análise', description: 'Ainda está avaliando a proposta' },
   Novo: { label: 'Primeiro contato', description: 'Chegou recentemente e ainda precisa ser qualificado' },
 }
 
