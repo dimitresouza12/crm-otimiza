@@ -982,12 +982,12 @@ const chatbotScope = async (request: FastifyRequest, reply: FastifyReply) => {
   return scope
 }
 
-const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled'
+const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome'
 type BotSettingsRow = BotSettings & { ai_enabled: boolean }
 
 const emptyBotSettings: BotSettingsRow = {
   is_active: false, welcome_message: '', fallback_message: '', off_hours_message: '', business_hours: defaultBusinessHours,
-  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true,
+  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true, promotion_message: '', promotion_in_welcome: false,
 }
 
 const loadBotSettings = async (companyId: string): Promise<BotSettingsRow> => {
@@ -1029,6 +1029,8 @@ const botSettingsFields = {
   botMode: z.enum(['always', 'outside_hours']).optional(),
   catalog: catalogSchema.optional(),
   priceRepliesEnabled: z.boolean().optional(),
+  promotionMessage: z.string().max(2000).optional(),
+  promotionInWelcome: z.boolean().optional(),
 }
 const chatbotSettingsSchema = z.object({ isActive: z.boolean(), aiEnabled: z.boolean().optional(), ...botSettingsFields })
 const clean = (value: string | undefined) => value?.trim() || null
@@ -1040,13 +1042,14 @@ app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, r
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Configuração do chatbot inválida.' })
   const input = parsed.data
   const { rows } = await query(
-    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true))
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true), $11, COALESCE($12::boolean, false))
      ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, off_hours_message = EXCLUDED.off_hours_message,
        business_hours = COALESCE($6::jsonb, chatbot_settings.business_hours), bot_mode = COALESCE($7::text, chatbot_settings.bot_mode), catalog = COALESCE($8::jsonb, chatbot_settings.catalog),
-       price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), updated_at = now()
+       price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), promotion_message = EXCLUDED.promotion_message,
+       promotion_in_welcome = COALESCE($12::boolean, chatbot_settings.promotion_in_welcome), updated_at = now()
      RETURNING ${botColumns}`,
-    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null],
+    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null, clean(input.promotionMessage), input.promotionInWelcome ?? null],
   )
   return rows[0]
 })
@@ -1116,6 +1119,8 @@ app.post('/api/chatbot/test', { preHandler: authenticate, config: { rateLimit: {
     ...(draft.botMode ? { bot_mode: draft.botMode } : {}),
     ...(draft.catalog ? { catalog: draft.catalog } : {}),
     ...(draft.priceRepliesEnabled !== undefined ? { price_replies_enabled: draft.priceRepliesEnabled } : {}),
+    ...(draft.promotionMessage !== undefined ? { promotion_message: clean(draft.promotionMessage) } : {}),
+    ...(draft.promotionInWelcome !== undefined ? { promotion_in_welcome: draft.promotionInWelcome } : {}),
   }
   const rules = (await loadBotRules(scope.companyId)).filter((rule) => rule.is_active)
   const now = parsed.data.at ? new Date(parsed.data.at) : new Date()

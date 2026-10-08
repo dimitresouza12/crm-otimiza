@@ -6,6 +6,8 @@ type Form = {
   active: boolean
   ai: boolean
   welcome: string
+  promotion: string
+  promotionInWelcome: boolean
   fallback: string
   offHours: string
   hoursEnabled: boolean
@@ -23,6 +25,8 @@ const toForm = (settings: BotSettingsData): Form => ({
   active: settings.is_active,
   ai: settings.ai_enabled,
   welcome: settings.welcome_message ?? '',
+  promotion: settings.promotion_message ?? '',
+  promotionInWelcome: settings.promotion_in_welcome ?? false,
   fallback: settings.fallback_message ?? '',
   offHours: settings.off_hours_message ?? '',
   hoursEnabled: settings.business_hours.enabled,
@@ -51,7 +55,7 @@ const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabl
     return { name: item.name.trim(), price, description: item.description.trim() || undefined }
   })
   return {
-    welcomeMessage: form.welcome, fallbackMessage: form.fallback, offHoursMessage: form.offHours,
+    welcomeMessage: form.welcome, promotionMessage: form.promotion, promotionInWelcome: form.promotionInWelcome, fallbackMessage: form.fallback, offHoursMessage: form.offHours,
     businessHours: { enabled: form.hoursEnabled, days: form.days, start: form.start, end: form.end },
     botMode: form.mode, priceRepliesEnabled: form.priceReplies, catalog,
   }
@@ -72,7 +76,6 @@ const topicTemplates = [
   { label: 'Endereço', name: 'Endereço', keywords: 'endereço, onde fica, localização, como chegar', answer: 'Estamos na Rua Exemplo, 100 - Centro. Ponto de referência: ao lado da praça.' },
   { label: 'Formas de pagamento', name: 'Formas de pagamento', keywords: 'pix, cartão, dinheiro, pagamento, forma de pagamento', answer: 'Aceitamos Pix, cartão de crédito e débito e dinheiro.' },
   { label: 'Agendamento', name: 'Agendamento', keywords: 'agendar, marcar, reservar, disponibilidade, horário disponível, vaga', answer: 'Para agendar, me diga o dia e o horário que prefere e já deixo reservado para você.' },
-  { label: 'Promoções', name: 'Promoções', keywords: 'promoção, desconto, oferta, cupom', answer: 'Temos uma condição especial esta semana! Me chame que passo os detalhes.' },
   { label: 'Outro assunto', name: '', keywords: '', answer: '' },
 ]
 
@@ -80,6 +83,9 @@ const sourceLabel: Record<string, string> = {
   keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
+
+const promotionRuleName = 'Promoção atual'
+const promotionKeywords = 'promoção, promocoes, desconto, oferta, cupom, tem promoção, tem desconto'
 
 function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (value: boolean) => void; label: string; hint?: string }) {
   return (
@@ -160,7 +166,13 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     try {
       const draft = draftFromForm(form)
       const result = await api.saveChatbotSettings(session, { isActive: form.active, aiEnabled: form.ai, ...draft })
-      setSaved(result); setForm(toForm(result)); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
+      const currentPromotion = rules.find((rule) => rule.name === promotionRuleName)
+      if (form.promotion.trim()) {
+        const input = { name: promotionRuleName, triggerValue: promotionKeywords, responseText: form.promotion.trim() }
+        if (currentPromotion) await api.updateChatbotRule(session, currentPromotion.id, { ...input, isActive: true })
+        else await api.createChatbotRule(session, input)
+      } else if (currentPromotion?.is_active) await api.updateChatbotRule(session, currentPromotion.id, { isActive: false })
+      setSaved(result); setForm(toForm(result)); await load(); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar.') } finally { setSaving(false) }
   }
 
@@ -182,6 +194,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
 
   const connected = channels.filter((channel) => channel.status === 'connected')
   const canSimulateOutside = form.hoursEnabled && Boolean(outsideHoursInstant(form))
+  const commonRules = rules.filter((rule) => rule.name !== promotionRuleName)
 
   return (
     <>
@@ -223,8 +236,17 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
           </label>
         </section>
 
+        <section className="panel bot-card bot-card--promotion">
+          <div className="bot-card__head"><span className="bot-step">3</span><div><h2><Tag size={16} /> Promoção atual</h2><p>Quando alguém perguntar por promoção, desconto ou oferta, o bot envia esta mensagem.</p></div></div>
+          <label>Mensagem da promoção <small>Deixe em branco quando não houver promoção ativa.</small>
+            <textarea rows={3} value={form.promotion} onChange={(event) => update({ promotion: event.target.value })} placeholder="Ex.: Esta semana, a avaliação é gratuita e o clareamento está com 15% de desconto até sexta." />
+          </label>
+          <Toggle checked={form.promotionInWelcome} onChange={(value) => update({ promotionInWelcome: value })} label="Mostrar também nas boas-vindas" hint={form.promotion.trim() ? 'A promoção será incluída na primeira resposta do bot.' : 'Escreva a promoção acima para ativar esta opção.'} />
+          <div className="bot-promotion__keywords"><span>O bot reconhece:</span><b>promoção</b><b>desconto</b><b>oferta</b><b>cupom</b></div>
+        </section>
+
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">3</span><div><h2><Clock size={16} /> Horário de atendimento</h2><p>Defina quando sua equipe está disponível e quando o bot deve falar.</p></div></div>
+          <div className="bot-card__head"><span className="bot-step">4</span><div><h2><Clock size={16} /> Horário de atendimento</h2><p>Defina quando sua equipe está disponível e quando o bot deve falar.</p></div></div>
           <Toggle checked={form.hoursEnabled} onChange={(value) => update({ hoursEnabled: value })} label="Tenho horário de atendimento" hint="Se desligado, o bot trata todos os horários igual" />
           {form.hoursEnabled && (
             <div className="bot-hours">
@@ -242,7 +264,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">4</span><div><h2><Tag size={16} /> Seus preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar “quanto custa?”, o bot responde com estes valores.</p></div></div>
+          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar “quanto custa?”, o bot responde com estes valores.</p></div></div>
           <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
           <div className="bot-catalog">
             {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$)</span><span>Detalhe <small>opcional</small></span><span /></div>}
@@ -259,13 +281,13 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">5</span><div><h2>Respostas por assunto</h2><p>Para cada assunto, diga que palavras o cliente costuma usar e o que o bot deve responder.</p></div><span className="count-pill">{rules.length}</span></div>
+          <div className="bot-card__head"><span className="bot-step">6</span><div><h2>Respostas por assunto</h2><p>Para cada assunto, diga que palavras o cliente costuma usar e o que o bot deve responder.</p></div><span className="count-pill">{commonRules.length}</span></div>
           <div className="bot-topics">
-            {rules.map((rule) => <TopicCard key={`${rule.id}-${rule.name}-${rule.trigger_value}-${rule.response_text}`} rule={rule}
+            {commonRules.map((rule) => <TopicCard key={`${rule.id}-${rule.name}-${rule.trigger_value}-${rule.response_text}`} rule={rule}
               onSave={(id, fields) => runRule(() => api.updateChatbotRule(session, id, fields), 'Assunto salvo.')}
               onToggle={(item) => void runRule(() => api.updateChatbotRule(session, item.id, { isActive: !item.is_active }))}
               onDelete={(item) => { if (window.confirm(`Apagar o assunto "${item.name}"?`)) void runRule(() => api.deleteChatbotRule(session, item.id), 'Assunto apagado.') }} />)}
-            {!rules.length && !addingTopic && <p className="chatbot-empty">Nenhum assunto ainda. Comece por um modelo pronto abaixo e ajuste o texto.</p>}
+            {!commonRules.length && !addingTopic && <p className="chatbot-empty">Nenhum assunto ainda. Comece por um modelo pronto abaixo e ajuste o texto.</p>}
           </div>
           {addingTopic ? (
             <form className="bot-topic bot-topic--new" onSubmit={(event) => { event.preventDefault(); void runRule(async () => { await api.createChatbotRule(session, { name: newTopic.name, triggerValue: newTopic.keywords, responseText: newTopic.answer }); setAddingTopic(false); setNewTopic({ name: '', keywords: '', answer: '' }) }, 'Assunto criado.') }}>
@@ -280,7 +302,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">6</span><div><h2>Teste o seu bot</h2><p>Escreva como se fosse um cliente e veja a resposta, sem enviar nada de verdade. Vale também para o que você ainda não salvou.</p></div></div>
+          <div className="bot-card__head"><span className="bot-step">7</span><div><h2>Teste o seu bot</h2><p>Escreva como se fosse um cliente e veja a resposta, sem enviar nada de verdade. Vale também para o que você ainda não salvou.</p></div></div>
           <div className="bot-sim">
             <div className="bot-sim__chat" aria-live="polite">
               {!conversation.length && <p className="chatbot-empty">Experimente: “oi”, “quanto custa?”, “onde fica?”…</p>}

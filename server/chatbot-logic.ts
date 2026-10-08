@@ -11,6 +11,8 @@ export type BotSettings = {
   bot_mode: 'always' | 'outside_hours'
   catalog: CatalogItem[]
   price_replies_enabled: boolean
+  promotion_message?: string | null
+  promotion_in_welcome?: boolean
 }
 export type BotRule = { id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }
 export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback'; ruleId?: string }
@@ -76,9 +78,11 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
 
   const offHours = settings.off_hours_message?.trim()
   const welcome = settings.welcome_message?.trim() || rules.find((rule) => rule.trigger_type === 'first_message')?.response_text.trim()
+  const promotion = settings.promotion_message?.trim()
   if (input.isFirstMessage) {
     if (outside && offHours) return { text: offHours, source: 'off_hours' }
-    if (welcome) return { text: welcome, source: 'welcome' }
+    const firstReply = [welcome, settings.promotion_in_welcome && promotion ? promotion : ''].filter(Boolean).join('\n\n')
+    if (firstReply) return { text: firstReply, source: 'welcome' }
   }
   if (outside && offHours) return { text: offHours, source: 'off_hours' }
   const fallback = settings.fallback_message?.trim()

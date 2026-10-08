@@ -50,6 +50,13 @@ test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', 
   assert.equal(chooseBotReply({ settings, rules, text: 'blá', isFirstMessage: false, now: open })?.source, 'fallback')
 })
 
+test('promoção pode ser incluída na mensagem de boas-vindas', () => {
+  const withPromotion = { ...settings, promotion_message: 'Esta semana, avaliação gratuita até sexta.', promotion_in_welcome: true }
+  const reply = chooseBotReply({ settings: withPromotion, rules, text: 'oi', isFirstMessage: true, now: open })
+  assert.match(reply?.text ?? '', /Bem-vindo à Barbearia X/)
+  assert.match(reply?.text ?? '', /avaliação gratuita até sexta/)
+})
+
 test('assunto ou preço na primeira mensagem tem prioridade sobre as boas-vindas', () => {
   assert.equal(chooseBotReply({ settings, rules, text: 'oi, qual o endereço?', isFirstMessage: true, now: open })?.ruleId, 'r1')
 })

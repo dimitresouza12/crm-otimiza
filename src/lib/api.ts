@@ -14,9 +14,9 @@ export type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; messa
 
 export type CatalogItem = { name: string; price: number | null; description?: string }
 export type BusinessHours = { enabled: boolean; days: number[]; start: string; end: string }
-export type BotSettingsData = { is_active: boolean; welcome_message: string | null; fallback_message: string | null; off_hours_message: string | null; business_hours: BusinessHours; bot_mode: 'always' | 'outside_hours'; catalog: CatalogItem[]; price_replies_enabled: boolean; ai_enabled: boolean }
+export type BotSettingsData = { is_active: boolean; welcome_message: string | null; fallback_message: string | null; off_hours_message: string | null; business_hours: BusinessHours; bot_mode: 'always' | 'outside_hours'; catalog: CatalogItem[]; price_replies_enabled: boolean; ai_enabled: boolean; promotion_message: string | null; promotion_in_welcome: boolean }
 export type BotRuleData = { id: string; name: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string; is_active: boolean; position: number }
-export type BotSettingsInput = { isActive: boolean; aiEnabled?: boolean; welcomeMessage?: string; fallbackMessage?: string; offHoursMessage?: string; businessHours?: BusinessHours; botMode?: 'always' | 'outside_hours'; catalog?: Array<{ name: string; price: number | null; description?: string }>; priceRepliesEnabled?: boolean }
+export type BotSettingsInput = { isActive: boolean; aiEnabled?: boolean; welcomeMessage?: string; fallbackMessage?: string; offHoursMessage?: string; businessHours?: BusinessHours; botMode?: 'always' | 'outside_hours'; catalog?: Array<{ name: string; price: number | null; description?: string }>; priceRepliesEnabled?: boolean; promotionMessage?: string; promotionInWelcome?: boolean }
 
 const unavailableMessage = 'O servidor está indisponível no momento. Tente novamente em instantes.'
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
