@@ -468,8 +468,8 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .column-cards::-webkit-scrollbar-thumb:hover { background: #7669ef; }
 
 /* Interesse do lead, com linguagem comercial direta. */
-.temperature { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 8px; line-height: 1; white-space: nowrap; }
-.temperature__emoji { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 10px; line-height: 1; }
+.temperature { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 5px; font-size: 8px; line-height: 1; white-space: nowrap; }
+.temperature i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
 /* Destaque de resultado comercial. */
 .results-hero { display: grid; grid-template-columns: minmax(230px, .8fr) minmax(0, 1.2fr); gap: 20px; align-items: center; padding: 24px 26px; margin-bottom: 14px; overflow: hidden; color: #fff; border-radius: 15px; background: radial-gradient(circle at 78% 5%, rgba(134, 125, 255, .65), transparent 31%), radial-gradient(circle at 8% 108%, rgba(54, 205, 167, .27), transparent 32%), #302762; box-shadow: 0 13px 30px rgba(48, 39, 98, .18); }

@@ -222,15 +222,15 @@ function Avatar({ initials, small = false }: { initials: string; small?: boolean
   return <span className={`avatar ${small ? 'avatar--small' : ''}`}>{initials}</span>
 }
 
-const leadInterest: Record<Lead['temperature'], { emoji: string; description: string }> = {
-  Quente: { emoji: '🔥', description: 'Demonstrou forte intenção de compra' },
-  Morno: { emoji: '🌤️', description: 'Ainda está avaliando a proposta' },
-  Novo: { emoji: '✨', description: 'Chegou recentemente e ainda precisa ser qualificado' },
+const leadInterest: Record<Lead['temperature'], { label: string; description: string }> = {
+  Quente: { label: 'Prioridade alta', description: 'Demonstrou forte intenção de compra' },
+  Morno: { label: 'Em avaliação', description: 'Ainda está avaliando a proposta' },
+  Novo: { label: 'Primeiro contato', description: 'Chegou recentemente e ainda precisa ser qualificado' },
 }
 
 function LeadInterest({ temperature }: { temperature: Lead['temperature'] }) {
   const interest = leadInterest[temperature]
-  return <span className={`temperature temperature--${temperature.toLowerCase()}`} title={`Temperatura do lead: ${temperature}. ${interest.description}`}><span className="temperature__emoji" aria-hidden="true">{interest.emoji}</span>{temperature}</span>
+  return <span className={`temperature temperature--${temperature.toLowerCase()}`} title={interest.description}><i aria-hidden="true" />{interest.label}</span>
 }
 
 function WhatsAppIcon({ size = 16 }: { size?: number }) {
@@ -327,7 +327,7 @@ function buildMetricDetail(kind: MetricKind, { metrics, leads, sales, hide }: { 
       stats: [{ label: 'Neste mês', value: mask(String(metrics?.leadsThisMonth ?? 0)) }, { label: 'Total no CRM', value: mask(String(leads.length)) }, { label: 'Principal origem', value: bySource[0]?.[0] ?? '—' }],
       sections: [
         { title: 'De onde vieram', empty: 'As origens aparecem quando entrarem os primeiros leads.', rows: bySource.slice(0, 5).map(([source, count]) => ({ label: source, sub: plural(count, 'lead', 'leads'), value: mask(`${Math.round((count / Math.max(leads.length, 1)) * 100)}%`), share: Math.round((count / Math.max(leads.length, 1)) * 100), action: { kind: 'search' as const, text: source }, hint: `Ver leads de ${source}` })) },
-        { title: 'Interesse dos leads', empty: 'Sem leads ainda.', rows: leads.length ? byHeat.map(({ temperature, count }) => ({ label: `${leadInterest[temperature].emoji} ${temperature}`, sub: leadInterest[temperature].description, value: mask(String(count)), share: Math.round((count / Math.max(leads.length, 1)) * 100), action: { kind: 'page' as const, page: 'leads' as const }, hint: 'Ver leads' })) : [] },
+        { title: 'Momento dos leads', empty: 'Sem leads ainda.', rows: leads.length ? byHeat.map(({ temperature, count }) => ({ label: leadInterest[temperature].label, sub: leadInterest[temperature].description, value: mask(String(count)), share: Math.round((count / Math.max(leads.length, 1)) * 100), action: { kind: 'page' as const, page: 'leads' as const }, hint: 'Ver leads' })) : [] },
       ],
       cta: { label: 'Ver Leads', page: 'leads' },
     }
