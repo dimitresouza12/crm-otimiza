@@ -681,6 +681,8 @@ function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Sessi
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [status, setStatus] = useState<'pending' | 'connected' | 'disconnected' | 'error'>('pending')
   const [qrCode, setQrCode] = useState<string | null>(null)
+  const [qrModalOpen, setQrModalOpen] = useState(false)
+  const [disconnectModalOpen, setDisconnectModalOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -691,20 +693,23 @@ function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Sessi
     if (!selectedId && result[0]) { setSelectedId(result[0].id); setStatus(result[0].status) }
   }
   useEffect(() => { void reload().catch(() => setError('Não foi possível carregar os canais.')) }, [session])
+  const refreshStatus = async (channelId = selectedId) => {
+    if (!session || !channelId) return
+    const result = await api.evolutionStatus(session, channelId)
+    setStatus(result.status)
+    setChannels((current) => current.map((channel) => channel.id === channelId ? { ...channel, status: result.status } : channel))
+    if (result.status === 'connected') { setQrCode(null); setQrModalOpen(false) }
+  }
   useEffect(() => {
-    if (!session || !selectedId || status === 'connected' || status === 'error') return
-    const timer = window.setInterval(() => {
-      void api.evolutionStatus(session, selectedId).then((result) => {
-        setStatus(result.status)
-        if (result.status === 'connected') { setQrCode(null); void reload() }
-      }).catch(() => setError('A conexão com a Evolution está indisponível no momento.'))
-    }, 5000)
+    if (!session || !selectedId) return
+    void refreshStatus().catch(() => undefined)
+    const timer = window.setInterval(() => { void refreshStatus().catch(() => undefined) }, 10_000)
     return () => window.clearInterval(timer)
-  }, [session, selectedId, status])
+  }, [session, selectedId])
 
   const showQr = async (channelId: string) => {
     if (!session) return onRequestAccess()
-    setBusy(true); setError(''); setQrCode(null)
+    setBusy(true); setError(''); setQrCode(null); setQrModalOpen(true)
     try {
       const result = await api.evolutionQr(session, channelId)
       setStatus(result.status)
@@ -733,13 +738,25 @@ function EvolutionConnectionPanel({ session, onRequestAccess }: { session: Sessi
       if (result.status !== 'connected') await showQr(selectedId)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível reconectar.') } finally { setBusy(false) }
   }
+  const disconnect = async () => {
+    if (!session || !selectedId) return
+    setBusy(true); setError('')
+    try {
+      await api.disconnectEvolution(session, selectedId)
+      setStatus('disconnected'); setQrCode(null); setQrModalOpen(false); setDisconnectModalOpen(false)
+      setChannels((current) => current.map((channel) => channel.id === selectedId ? { ...channel, status: 'disconnected' } : channel))
+      await reload()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível desconectar o WhatsApp.') } finally { setBusy(false) }
+  }
   const selected = channels.find((channel) => channel.id === selectedId)
   return <div className="evolution-panel">
     {!session ? <button className="primary-button" type="button" onClick={onRequestAccess}>Entrar para conectar <ArrowRight size={16}/></button> : <>
       {channels.length > 0 && <div className="evolution-channels">{channels.map((channel) => <button key={channel.id} className={selectedId === channel.id ? 'is-current' : ''} type="button" onClick={() => { setSelectedId(channel.id); setStatus(channel.status); setQrCode(null); setError('') }}><span className={`evolution-indicator evolution-indicator--${channel.status}`}/><span><b>{channel.name}</b><small>{channel.status === 'connected' ? 'Conectado' : channel.status === 'error' ? 'Requer atenção' : 'Aguardando conexão'}</small></span></button>)}</div>}
-      {selected && <div className="evolution-current"><b>{selected.name}</b><span>{status === 'connected' ? 'WhatsApp conectado. As novas mensagens serão registradas no CRM.' : 'Abra WhatsApp > Aparelhos conectados > Conectar aparelho e escaneie o código.'}</span>{qrCode && status !== 'connected' && <img src={qrCode} alt="QR Code para conectar o WhatsApp"/>}<div className="evolution-actions">{status === 'error' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void retry()}>Tentar novamente</button> : status !== 'connected' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void showQr(selected.id)}>{busy ? 'Gerando...' : qrCode ? 'Atualizar QR Code' : 'Mostrar QR Code'}</button> : <span className="security-status"><CheckCircle2 size={15}/> Conectado</span>}</div></div>}
+      {selected && <div className="evolution-current"><b>{selected.name}</b><span>{status === 'connected' ? 'WhatsApp conectado. As novas mensagens serão registradas no CRM.' : status === 'disconnected' ? 'WhatsApp desconectado. Gere um novo QR Code para conectar novamente.' : 'Abra WhatsApp > Aparelhos conectados > Conectar aparelho e escaneie o código.'}</span><div className="evolution-actions">{status === 'error' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void retry()}>Tentar novamente</button> : status !== 'connected' ? <button type="button" className="toolbar-button" disabled={busy} onClick={() => void showQr(selected.id)}>{busy ? 'Gerando...' : 'Mostrar QR Code'}</button> : <><span className="security-status"><CheckCircle2 size={15}/> Conectado</span><button type="button" className="toolbar-button" disabled={busy} onClick={() => void refreshStatus(selected.id)}>Atualizar status</button><button type="button" className="toolbar-button toolbar-button--danger" disabled={busy} onClick={() => setDisconnectModalOpen(true)}>Desconectar</button></>}</div></div>}
       <form className="connection-form evolution-create" onSubmit={(event) => void createChannel(event)}><label>Adicionar número<input value={channelName} onChange={(event) => setChannelName(event.target.value)} required minLength={2} placeholder="Ex.: Comercial"/></label><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Preparando...' : 'Criar conexão'} <Plus size={16}/></button></form>
       {error && <p className="form-error">{error}</p>}
+      {qrModalOpen && <Modal label="QR Code do WhatsApp" onClose={() => setQrModalOpen(false)}><header className="modal__header"><div><span className="eyebrow">CONECTAR WHATSAPP</span><h2>Escaneie o QR Code</h2></div><button type="button" onClick={() => setQrModalOpen(false)} aria-label="Fechar"><X size={18}/></button></header><section className="evolution-qr-modal">{busy && !qrCode ? <p>Gerando QR Code…</p> : qrCode ? <img src={qrCode} alt="QR Code para conectar o WhatsApp"/> : <p>{status === 'connected' ? 'Este número já está conectado.' : 'O QR Code expirou. Gere um novo código para continuar.'}</p>}<p>Abra o WhatsApp no celular, vá em <b>Aparelhos conectados</b> e escaneie o código.</p>{status !== 'connected' && <button type="button" className="toolbar-button" disabled={busy} onClick={() => void showQr(selectedId!)}>{busy ? 'Gerando...' : 'Gerar novo QR Code'}</button>}</section></Modal>}
+      {disconnectModalOpen && selected && <Modal label="Desconectar WhatsApp" onClose={() => setDisconnectModalOpen(false)}><header className="modal__header"><div><span className="eyebrow">DESCONECTAR NÚMERO</span><h2>Desconectar {selected.name}?</h2></div><button type="button" onClick={() => setDisconnectModalOpen(false)} aria-label="Fechar"><X size={18}/></button></header><section className="evolution-disconnect-modal"><p>O CRM deixará de receber novas mensagens deste número até que ele seja conectado novamente por QR Code.</p><div><button type="button" className="toolbar-button" disabled={busy} onClick={() => setDisconnectModalOpen(false)}>Cancelar</button><button type="button" className="primary-button primary-button--danger" disabled={busy} onClick={() => void disconnect()}>{busy ? 'Desconectando...' : 'Desconectar WhatsApp'}</button></div></section></Modal>}
     </>}
   </div>
 }

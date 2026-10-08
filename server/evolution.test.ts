@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { createEvolutionInstance, evolutionQr, evolutionSendText, evolutionState, setEvolutionWebhook } from './evolution.js'
+import { createEvolutionInstance, evolutionLogout, evolutionQr, evolutionSendText, evolutionState, setEvolutionWebhook } from './evolution.js'
 
 const originalFetch = globalThis.fetch
 const originalUrl = process.env.EVOLUTION_API_URL
@@ -32,10 +32,13 @@ test('cria instância isolada, configura eventos, gera QR local e consulta estad
   assert.equal(await evolutionState('canal-1', 'token-do-canal'), 'open')
   assert.match(await evolutionQr('canal-1', 'token-do-canal'), /^data:image\/png;base64,/)
   await evolutionSendText('canal-1', 'token-do-canal', '5585999999999', 'Olá')
+  await evolutionLogout('canal-1', 'token-do-canal')
 
   assert.equal(calls[0].apikey, 'global-test-key')
   assert.deepEqual(calls[0].body, { instanceName: 'canal-1', integration: 'WHATSAPP-BAILEYS', token: 'token-do-canal', qrcode: true })
   assert.equal(calls[1].apikey, 'token-do-canal')
   assert.deepEqual((calls[1].body?.webhook as Record<string, unknown>)?.events, ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'])
   assert.deepEqual(calls[4].body, { number: '5585999999999', text: 'Olá' })
+  assert.equal(calls[5].url, 'https://evolution.test/instance/logout/canal-1')
+  assert.equal(calls[5].method, 'DELETE')
 })

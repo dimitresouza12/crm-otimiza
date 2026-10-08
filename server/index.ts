@@ -14,7 +14,7 @@ import { z } from 'zod'
 import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
-import { createEvolutionInstance, evolutionConfigured, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
+import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
 import { chooseBotReply, defaultBusinessHours, isWithinBusinessHours, splitKeywords, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
 import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
@@ -946,6 +946,27 @@ app.get('/api/integrations/evolution/:channelId/status', { preHandler: authentic
     app.log.warn({ error, channelId: connection.channel_id }, 'Falha ao consultar estado Evolution')
     return reply.code(502).send({ error: 'Não foi possível consultar a Evolution agora.' })
   }
+})
+
+app.post('/api/integrations/evolution/:channelId/disconnect', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode desconectar canais.' })
+  const params = z.object({ channelId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Canal inválido.' })
+  const connection = await evolutionConnection(params.data.channelId, scope.companyId)
+  if (!connection) return reply.code(404).send({ error: 'Canal Evolution não encontrado.' })
+  try {
+    await evolutionLogout(connection.external_account_id, decryptSecret(connection.access_token_encrypted))
+  } catch (error) {
+    // Se a sessão já foi encerrada pelo próprio WhatsApp, o canal ainda deve refletir isso no CRM.
+    if (!(error instanceof EvolutionError) || ![400, 404].includes(error.status)) {
+      app.log.warn({ error, channelId: connection.channel_id }, 'Falha ao desconectar Evolution')
+      return reply.code(502).send({ error: 'Não foi possível desconectar o WhatsApp agora. Tente novamente.' })
+    }
+  }
+  await query(`UPDATE whatsapp_channels SET status = 'disconnected', updated_at = now() WHERE id = $1`, [connection.channel_id])
+  return { status: 'disconnected' }
 })
 
 app.get('/api/integrations/evolution/:channelId/qr', { preHandler: authenticate, config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (request, reply) => {

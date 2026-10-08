@@ -77,6 +77,9 @@ export const evolutionQr = async (instanceName: string, instanceToken: string) =
   return QRCode.toDataURL(code, { margin: 1, width: 320 })
 }
 
+export const evolutionLogout = (instanceName: string, instanceToken: string) =>
+  request(`/instance/logout/${encodeURIComponent(instanceName)}`, instanceToken, 'DELETE')
+
 export type EvolutionQuote = { key: { remoteJid: string; fromMe: boolean; id: string }; message: { conversation: string } }
 
 export const evolutionSendText = (instanceName: string, instanceToken: string, number: string, text: string, quoted?: EvolutionQuote) =>
