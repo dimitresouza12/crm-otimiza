@@ -23,6 +23,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Mail,
+  Menu,
   MessageCircleMore,
   MoreHorizontal,
   Plus,
@@ -55,7 +56,8 @@ type Lead = {
   initials: string
   stage: Stage
   channel: Exclude<Channel, 'Todos os canais'>
-  source: 'Meta Ads' | 'Orgânico' | 'Indicação' | 'Google Ads'
+  source: string
+  createdAt?: string
   value?: number
   time: string
   lastMessage: string
@@ -214,7 +216,7 @@ function MetricCard({ title, value, trend, emphasis, tone, onOpen }: { title: st
     <article className={`metric-card ${emphasis ? 'metric-card--emphasis' : ''} ${tone ? `metric-card--${tone}` : ''} ${onOpen ? 'metric-card--clickable' : ''}`} {...interactive}>
       <div className="metric-card__top"><span>{title}</span>{onOpen ? <ArrowUpRight className="metric-card__open" size={17} aria-hidden="true" /> : <MoreHorizontal size={18} />}</div>
       <strong>{value}</strong>
-      <p><TrendingUp size={14} /> {trend} <span>vs. mês anterior</span></p>
+      <p><TrendingUp size={14} /> {trend}</p>
     </article>
   )
 }
@@ -382,53 +384,65 @@ function MetricDetailModal({ detail, onClose, onNavigate, onAction }: { detail: 
   )
 }
 
-function Dashboard({ onNavigate, onOpenLead, onFocusStage, onSearchLeads, metrics, leads, sales }: { onNavigate: (page: Page) => void; onOpenLead: (lead: Lead) => void; onFocusStage: (stage: Stage) => void; onSearchLeads: (text: string) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
+function DashboardRevenueChart({ timeline }: { timeline: Array<{ date: string; revenue: string }> }) {
+  const cumulative = timeline.reduce<number[]>((values, day) => { values.push((values.at(-1) ?? 0) + Number(day.revenue)); return values }, [])
+  const maximum = Math.max(...cumulative, 1)
+  const points = cumulative.map((value, index) => `${cumulative.length === 1 ? 340 : index * 680 / (cumulative.length - 1)},${184 - (value / maximum) * 160}`).join(' ')
+  const axis = [0, .25, .5, .75, 1].map((fraction) => timeline[Math.round((timeline.length - 1) * fraction)]?.date ?? '')
+  return <><div className="chart" role="img" aria-label={`Evolução acumulada do faturamento confirmado: ${money(cumulative.at(-1) ?? 0)}`}><div className="chart__grid"/><svg viewBox="0 0 680 208" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="dashboardChartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#a69cff" stopOpacity=".48"/><stop offset="100%" stopColor="#a69cff" stopOpacity="0"/></linearGradient></defs>{points && <><path d={`M 0 208 L ${points} L 680 208 Z`} fill="url(#dashboardChartFill)"/><polyline points={points} fill="none" stroke="#655ce0" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></>}</svg></div><div className="chart-axis">{axis.map((date, index) => <span key={`${date}-${index}`}>{date ? new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '') : '—'}</span>)}</div></>
+}
+
+function Dashboard({ session, onNavigate, onOpenLead, onFocusStage, onSearchLeads, metrics, leads, sales }: { session: Session; onNavigate: (page: Page) => void; onOpenLead: (lead: Lead) => void; onFocusStage: (stage: Stage) => void; onSearchLeads: (text: string) => void; metrics?: { confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number }; leads: Lead[]; sales: SaleRow[] }) {
   const [areValuesVisible, setAreValuesVisible] = useState(true)
   const [openMetric, setOpenMetric] = useState<MetricKind | null>(null)
-  const revenue = metrics?.confirmedRevenue ?? 0
-  const confirmedSales = metrics?.confirmedSales ?? 0
+  const currentDate = new Date()
+  const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth)
+  const [report, setReport] = useState<Awaited<ReturnType<typeof api.reports>> | null>(null)
+  const [reportError, setReportError] = useState('')
+  const monthOptions = useMemo(() => Array.from({ length: 12 }, (_, index) => { const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - index, 1); const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; return { value, label: date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) } }), [currentMonth])
+  useEffect(() => {
+    let cancelled = false
+    const [year, month] = selectedMonth.split('-').map(Number)
+    const start = `${selectedMonth}-01`
+    const lastDay = new Date(year, month, 0).getDate()
+    const end = selectedMonth === currentMonth ? `${selectedMonth}-${String(currentDate.getDate()).padStart(2, '0')}` : `${selectedMonth}-${lastDay}`
+    setReport(null); setReportError('')
+    void api.reports(session, start, end).then((data) => { if (!cancelled) setReport(data) }).catch((reason) => { if (!cancelled) setReportError(reason instanceof Error ? reason.message : 'Não foi possível carregar este período.') })
+    return () => { cancelled = true }
+  }, [session, selectedMonth, currentMonth])
+  if (!report) return <section className="panel page-loading">{reportError || 'Carregando os resultados do mês...'}</section>
+  const revenue = Number(report.totals.revenue)
+  const confirmedSales = Number(report.totals.sales)
   const openLeads = metrics?.openLeads ?? 0
-  const averageTicket = metrics?.averageTicket ?? 0
-  const leadsThisMonth = metrics?.leadsThisMonth ?? 0
+  const averageTicket = Number(report.totals.ticket)
+  const leadsThisMonth = Number(report.totals.leads)
+  const selectedLabel = monthOptions.find((item) => item.value === selectedMonth)?.label ?? selectedMonth
+  const periodSales = sales.filter((sale) => sale.status === 'confirmed' && sale.confirmed_at?.slice(0, 7) === selectedMonth)
+  const periodLeads = leads.filter((lead) => lead.createdAt?.slice(0, 7) === selectedMonth)
+  const periodMetrics = { confirmedRevenue: revenue, confirmedSales, averageTicket, leadsThisMonth, openLeads }
   const attention = leads.filter((lead) => lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos').slice(0, 3)
   const show = (value: string) => areValuesVisible ? value : '••••'
   const showMoney = (value: number) => show(money(value))
-  const sourceResults = Array.from(leads.reduce((accumulator, lead) => {
-    const current = accumulator.get(lead.source) ?? { name: lead.source, revenue: 0, leads: 0 }
-    current.leads += 1
-    accumulator.set(lead.source, current)
-    return accumulator
-  }, new Map<string, { name: string; revenue: number; leads: number }>()).values()).map((source) => ({
-    ...source,
-    revenue: sales.filter((sale) => sale.status === 'confirmed' && sale.opportunity_id && leads.some((lead) => lead.opportunityId === sale.opportunity_id && lead.source === source.name)).reduce((total, sale) => total + Number(sale.amount), 0),
-  })).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads)
+  const sourceResults = report.sources.map((source) => ({ name: source.source, revenue: Number(source.revenue), leads: Number(source.leads) })).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads)
   return (
     <>
       <section className="page-head">
-        <div><span className="eyebrow">VISÃO GERAL · SETEMBRO</span><h1>Seu atendimento está convertendo mais.</h1><p>Veja o que gerou receita e onde sua equipe pode agir agora.</p></div>
-        <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><button className="period-button" type="button" aria-label="Selecionar período dos resultados"><CalendarDays size={15}/><span>Setembro de 2026</span><ChevronDown size={16} /></button></div>
+        <div><span className="eyebrow">VISÃO GERAL · {selectedLabel.toLocaleUpperCase('pt-BR')}</span><h1>Resultados do seu atendimento.</h1><p>Receita confirmada no período e oportunidades que precisam de atenção.</p></div>
+        <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><label className="period-button"><CalendarDays size={15}/><select aria-label="Selecionar mês dos resultados" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>{monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown size={16}/></label></div>
       </section>
       <section className="metric-grid">
         <MetricCard title="Receita confirmada" value={showMoney(revenue)} trend={areValuesVisible ? `${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}` : 'Vendas confirmadas'} emphasis tone="revenue" onOpen={() => setOpenMetric('revenue')} />
-        <MetricCard title="Em negociação" value={areValuesVisible ? `${openLeads} leads` : '••••'} trend="Acompanhe no funil" tone="pipeline" onOpen={() => setOpenMetric('pipeline')} />
-        <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram neste mês" tone="leads" onOpen={() => setOpenMetric('leads')} />
+        <MetricCard title="Em negociação" value={areValuesVisible ? `${openLeads} leads` : '••••'} trend="Situação atual do funil" tone="pipeline" onOpen={() => setOpenMetric('pipeline')} />
+        <MetricCard title="Novos leads" value={show(String(leadsThisMonth))} trend="Entraram no período" tone="leads" onOpen={() => setOpenMetric('leads')} />
         <MetricCard title="Ticket médio" value={showMoney(averageTicket)} trend="Receita confirmada" tone="ticket" onOpen={() => setOpenMetric('ticket')} />
       </section>
-      {openMetric && <MetricDetailModal detail={buildMetricDetail(openMetric, { metrics, leads, sales, hide: !areValuesVisible })} onClose={() => setOpenMetric(null)} onNavigate={onNavigate} onAction={(action) => { setOpenMetric(null); if (action.kind === 'page') onNavigate(action.page); else if (action.kind === 'lead') onOpenLead(action.lead); else if (action.kind === 'stage') onFocusStage(action.stage); else onSearchLeads(action.text) }} />}
+      {openMetric && <MetricDetailModal detail={buildMetricDetail(openMetric, { metrics: periodMetrics, leads: openMetric === 'pipeline' ? leads : periodLeads, sales: periodSales, hide: !areValuesVisible })} onClose={() => setOpenMetric(null)} onNavigate={onNavigate} onAction={(action) => { setOpenMetric(null); if (action.kind === 'page') onNavigate(action.page); else if (action.kind === 'lead') onOpenLead(action.lead); else if (action.kind === 'stage') onFocusStage(action.stage); else onSearchLeads(action.text) }} />}
       <section className="dashboard-grid">
         <article className="revenue-panel panel">
-          <div className="panel__header"><div><span className="eyebrow">RECEITA ATRIBUÍDA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button">Ver relatório <ArrowRight size={16} /></button></div>
+          <div className="panel__header"><div><span className="eyebrow">RECEITA CONFIRMADA</span><h2>Faturamento ao longo do mês</h2></div><button className="text-button" type="button" onClick={() => onNavigate('relatorios')}>Ver resultados <ArrowRight size={16} /></button></div>
           <div className="chart-summary"><strong>{showMoney(revenue)}</strong><span><TrendingUp size={15} /> Atualizado</span></div>
-          <div className="chart" aria-label="Gráfico de faturamento crescente">
-            <div className="chart__grid" />
-            <svg viewBox="0 0 680 208" preserveAspectRatio="none" role="img">
-              <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#a69cff" stopOpacity="0.52"/><stop offset="100%" stopColor="#a69cff" stopOpacity="0"/></linearGradient></defs>
-              <path d="M0 184 C48 174 58 145 94 151 S151 168 187 133 S235 144 273 112 S323 128 358 91 S408 110 442 80 S507 98 542 48 S588 70 625 36 S658 47 680 12 L680 208 L0 208 Z" fill="url(#chartFill)" />
-              <path d="M0 184 C48 174 58 145 94 151 S151 168 187 133 S235 144 273 112 S323 128 358 91 S408 110 442 80 S507 98 542 48 S588 70 625 36 S658 47 680 12" fill="none" stroke="#655ce0" strokeWidth="3" strokeLinecap="round" />
-              <circle cx="625" cy="36" r="5" fill="#655ce0" stroke="#fffdf7" strokeWidth="3" />
-            </svg>
-          </div>
-          <div className="chart-axis"><span>01 set.</span><span>08 set.</span><span>15 set.</span><span>22 set.</span><span>30 set.</span></div>
+          <DashboardRevenueChart timeline={report.timeline}/>
         </article>
         <article className="attention-panel panel">
           <div className="panel__header"><div><span className="eyebrow">PRÓXIMA AÇÃO</span><h2>Não deixe esfriar</h2></div><span className="count-pill">{areValuesVisible ? attention.length : '••'}</span></div>
@@ -438,9 +452,9 @@ function Dashboard({ onNavigate, onOpenLead, onFocusStage, onSearchLeads, metric
         </article>
       </section>
       <section className="source-section panel">
-        <div className="panel__header"><div><span className="eyebrow">ORIGEM DOS RESULTADOS</span><h2>O que trouxe as vendas deste mês</h2></div><button className="text-button" type="button" onClick={() => onNavigate('trafego')}>Analisar tráfego <ArrowRight size={16} /></button></div>
+        <div className="panel__header"><div><span className="eyebrow">ORIGEM DOS RESULTADOS</span><h2>O que trouxe as vendas do período</h2></div><button className="text-button" type="button" onClick={() => onNavigate('trafego')}>Analisar tráfego <ArrowRight size={16} /></button></div>
         <div className="source-rows">
-          {sourceResults.length ? sourceResults.map((source, index) => { const percent = revenue ? Math.round((source.revenue / revenue) * 100) : Math.round((source.leads / Math.max(leads.length, 1)) * 100); const types = ['meta', 'google', 'referral', 'organic']; return <div className="source-row" key={source.name}><span className={`source-dot source-dot--${types[index % types.length]}`} /><strong>{source.name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{showMoney(source.revenue)}</b><small>{show(`${percent}%`)}</small></div> }) : <div className="dashboard-empty">As origens aparecerão quando entrarem os primeiros leads.</div>}
+          {sourceResults.length ? sourceResults.map((source, index) => { const percent = revenue ? Math.round((source.revenue / revenue) * 100) : Math.round((source.leads / Math.max(leadsThisMonth, 1)) * 100); const types = ['meta', 'google', 'referral', 'organic']; return <div className="source-row" key={source.name}><span className={`source-dot source-dot--${types[index % types.length]}`} /><strong>{source.name}</strong><div className="progress"><i style={{ width: `${percent}%` }} /></div><b>{showMoney(source.revenue)}</b><small>{show(`${percent}%`)}</small></div> }) : <div className="dashboard-empty">As origens aparecerão quando entrarem os primeiros leads.</div>}
         </div>
       </section>
     </>
@@ -579,7 +593,7 @@ function TrafficPage({ session }: { session: Session }) {
     event.preventDefault(); setSaving(true); setError('')
     try { await api.createTraffic(session, { source, platform, periodStart, periodEnd, spend: Number(spend.replace(',', '.')), reportedLeads: Number(reportedLeads || 0) }); setSpend(''); setReportedLeads(''); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar a métrica.') } finally { setSaving(false) }
   }
-  return <><section className="page-head"><div><span className="eyebrow">RESULTADO DO TRÁFEGO</span><h1>Tráfego pago</h1><p>Veja quanto cada campanha colocou em investimento, trouxe de contatos e devolveu em vendas confirmadas.</p></div></section><section className="traffic-summary"><MetricCard title="Investimento" value={money(totals.spend)} trend={`${campaigns.length} campanha${campaigns.length === 1 ? '' : 's'} acompanhada${campaigns.length === 1 ? '' : 's'}`}/><MetricCard title="Receita atribuída" value={money(totals.revenue)} trend="Vendas já confirmadas" emphasis/><MetricCard title="ROAS" value={totals.spend ? `${(totals.revenue / totals.spend).toFixed(2)}x` : '—'} trend="Retorno por real investido"/><MetricCard title="Custo por lead" value={totals.leads ? money(costPerLead) : '—'} trend={`${totals.leads} lead${totals.leads === 1 ? '' : 's'} relacionado${totals.leads === 1 ? '' : 's'}`}/></section><section className="traffic-hero panel">{bestCampaign ? <><div><span className="eyebrow">LEITURA DO PERÍODO</span><h2>{bestCampaign.source} está trazendo o melhor retorno.</h2><p>Para cada R$ 1 investido nessa origem, o CRM atribuiu {money(bestCampaign.roas)} em vendas confirmadas.</p></div><div className="traffic-hero__numbers"><span><small>Melhor ROAS</small><b>{bestCampaign.roas.toFixed(2)}x</b></span><span><small>Receita por lead</small><b>{money(revenuePerLead)}</b></span><span><small>Vendas confirmadas</small><b>{totals.sales}</b></span></div></> : <><div><span className="eyebrow">COMECE A MEDIR</span><h2>Transforme o investimento em resultado visível.</h2><p>Registre cada campanha com o mesmo nome usado na origem do lead. O CRM relaciona os contatos e as vendas confirmadas automaticamente.</p></div><div className="traffic-hero__steps"><span><b>1</b> Registre a campanha</span><span><b>2</b> Use a origem nos leads</span><span><b>3</b> Acompanhe a receita</span></div></>}</section><section className="traffic-layout"><form className="traffic-form panel" onSubmit={submit}><div><span className="eyebrow">LANÇAMENTO MANUAL</span><h2>Registrar campanha</h2><p>Use a mesma origem cadastrada nos leads para o CRM atribuir contatos e vendas.</p></div><label>Nome da origem ou campanha<input required value={source} onChange={(event) => setSource(event.target.value)} placeholder="Ex.: Meta Ads · Implante outubro"/></label><label>Plataforma<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option>Meta Ads</option><option>Google Ads</option><option>TikTok Ads</option><option>Outro</option></select></label><div className="form-inline"><label>Início<input required type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)}/></label><label>Fim<input required type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)}/></label></div><div className="form-inline"><label>Investimento (R$)<input required inputMode="decimal" value={spend} onChange={(event) => setSpend(event.target.value)} placeholder="0,00"/></label><label>Leads da campanha<input inputMode="numeric" value={reportedLeads} onChange={(event) => setReportedLeads(event.target.value)} placeholder="Opcional"/></label></div>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Salvando...' : 'Registrar campanha'} <ArrowRight size={16}/></button></form><section className="traffic-table panel"><div className="panel__header"><div><span className="eyebrow">CAMPANHAS REGISTRADAS</span><h2>Onde o investimento virou resultado</h2></div><span className="count-pill">{campaigns.length}</span></div>{loading ? <p className="page-loading">Carregando métricas...</p> : campaigns.length ? <div className="traffic-rows traffic-campaigns">{campaigns.map((item) => { const returnRate = item.spend ? Math.min((item.revenue / Math.max(item.spend, item.revenue, 1)) * 100, 100) : 0; const status = !item.revenue ? 'Aguardando venda' : item.roas >= 2 ? 'Retorno positivo' : 'Em acompanhamento'; return <article key={item.id}><div className="traffic-campaign__title"><span>{item.platform.slice(0, 1)}</span><div><b>{item.source}</b><small>{item.platform} · {new Date(`${item.period_start}T12:00:00`).toLocaleDateString('pt-BR')} a {new Date(`${item.period_end}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><em className={item.roas >= 2 ? 'is-positive' : ''}>{status}</em></div><div className="traffic-campaign__metrics"><span><small>Investimento</small><b>{money(item.spend)}</b></span><span><small>Leads</small><b>{item.leads}</b></span><span><small>CPL</small><b>{item.leads ? money(item.cpl) : '—'}</b></span><span><small>Receita</small><b>{money(item.revenue)}</b></span><span><small>ROAS</small><b>{item.spend ? `${item.roas.toFixed(2)}x` : '—'}</b></span></div><div className="traffic-campaign__bar" aria-label={`Retorno de ${item.roas.toFixed(2)} vezes`}><i style={{ width: `${returnRate}%` }} /></div></article> })}</div> : <div className="traffic-empty"><span><TrendingUp size={20}/></span><div><b>Ainda não há campanhas registradas.</b><p>Comece pelo formulário ao lado. Depois, cadastre os leads com a mesma origem para acompanhar o retorno.</p></div></div>}</section></section></>
+  return <><section className="page-head"><div><span className="eyebrow">RESULTADO DO TRÁFEGO</span><h1>Tráfego pago</h1><p>Veja quanto cada campanha colocou em investimento, trouxe de contatos e devolveu em vendas confirmadas.</p></div></section><section className="traffic-summary"><MetricCard title="Investimento" value={money(totals.spend)} trend={`${campaigns.length} campanha${campaigns.length === 1 ? '' : 's'} acompanhada${campaigns.length === 1 ? '' : 's'}`}/><MetricCard title="Receita atribuída" value={money(totals.revenue)} trend="Vendas já confirmadas" emphasis/><MetricCard title="ROAS" value={totals.spend ? `${(totals.revenue / totals.spend).toFixed(2)}x` : '—'} trend="Retorno por real investido"/><MetricCard title="Custo por lead" value={totals.leads ? money(costPerLead) : '—'} trend={`${totals.leads} lead${totals.leads === 1 ? '' : 's'} relacionado${totals.leads === 1 ? '' : 's'}`}/></section><section className="traffic-hero panel">{bestCampaign ? <><div><span className="eyebrow">LEITURA DO PERÍODO</span><h2>{bestCampaign.source} está trazendo o melhor retorno.</h2><p>Para cada R$ 1 investido nessa origem, o CRM atribuiu {money(bestCampaign.roas)} em vendas confirmadas.</p></div><div className="traffic-hero__numbers"><span><small>Melhor ROAS</small><b>{bestCampaign.roas.toFixed(2)}x</b></span><span><small>Receita por lead</small><b>{money(revenuePerLead)}</b></span><span><small>Vendas confirmadas</small><b>{totals.sales}</b></span></div></> : <><div><span className="eyebrow">COMECE A MEDIR</span><h2>Transforme o investimento em resultado visível.</h2><p>Registre cada campanha com o mesmo nome usado na origem do lead. O CRM relaciona os contatos e as vendas confirmadas automaticamente.</p></div><div className="traffic-hero__steps"><span><b>1</b> Registre a campanha</span><span><b>2</b> Use a origem nos leads</span><span><b>3</b> Acompanhe a receita</span></div></>}</section><section className="traffic-layout"><form className="traffic-form panel" onSubmit={submit}><div><span className="eyebrow">LANÇAMENTO MANUAL</span><h2>Registrar campanha</h2><p>Use a mesma origem cadastrada nos leads para o CRM atribuir contatos e vendas.</p></div><label>Nome da origem ou campanha<input required list="traffic-source-options" maxLength={80} value={source} onChange={(event) => setSource(event.target.value)} placeholder="Ex.: Meta Ads · Implante outubro"/><datalist id="traffic-source-options">{[...new Set(items.map((item) => item.source))].map((item) => <option key={item} value={item}/>)}</datalist></label><label>Plataforma<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option>Meta Ads</option><option>Google Ads</option><option>TikTok Ads</option><option>Outro</option></select></label><div className="form-inline"><label>Início<input required type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)}/></label><label>Fim<input required type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)}/></label></div><div className="form-inline"><label>Investimento (R$)<input required inputMode="decimal" value={spend} onChange={(event) => setSpend(event.target.value)} placeholder="0,00"/></label><label>Leads da campanha<input inputMode="numeric" value={reportedLeads} onChange={(event) => setReportedLeads(event.target.value)} placeholder="Opcional"/></label></div>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Salvando...' : 'Registrar campanha'} <ArrowRight size={16}/></button></form><section className="traffic-table panel"><div className="panel__header"><div><span className="eyebrow">CAMPANHAS REGISTRADAS</span><h2>Onde o investimento virou resultado</h2></div><span className="count-pill">{campaigns.length}</span></div>{loading ? <p className="page-loading">Carregando métricas...</p> : campaigns.length ? <div className="traffic-rows traffic-campaigns">{campaigns.map((item) => { const returnRate = item.spend ? Math.min((item.revenue / Math.max(item.spend, item.revenue, 1)) * 100, 100) : 0; const status = !item.revenue ? 'Aguardando venda' : item.roas >= 2 ? 'Retorno positivo' : 'Em acompanhamento'; return <article key={item.id}><div className="traffic-campaign__title"><span>{item.platform.slice(0, 1)}</span><div><b>{item.source}</b><small>{item.platform} · {new Date(`${item.period_start}T12:00:00`).toLocaleDateString('pt-BR')} a {new Date(`${item.period_end}T12:00:00`).toLocaleDateString('pt-BR')}</small></div><em className={item.roas >= 2 ? 'is-positive' : ''}>{status}</em></div><div className="traffic-campaign__metrics"><span><small>Investimento</small><b>{money(item.spend)}</b></span><span><small>Leads</small><b>{item.leads}</b></span><span><small>CPL</small><b>{item.leads ? money(item.cpl) : '—'}</b></span><span><small>Receita</small><b>{money(item.revenue)}</b></span><span><small>ROAS</small><b>{item.spend ? `${item.roas.toFixed(2)}x` : '—'}</b></span></div><div className="traffic-campaign__bar" aria-label={`Retorno de ${item.roas.toFixed(2)} vezes`}><i style={{ width: `${returnRate}%` }} /></div></article> })}</div> : <div className="traffic-empty"><span><TrendingUp size={20}/></span><div><b>Ainda não há campanhas registradas.</b><p>Comece pelo formulário ao lado. Depois, cadastre os leads com a mesma origem para acompanhar o retorno.</p></div></div>}</section></section></>
 }
 
 type ResultsMetric = 'revenue' | 'sales' | 'leads'
@@ -759,19 +773,23 @@ function Modal({ children, onClose, label, wide = false }: { children: ReactNode
   return <div className="modal-layer" role="dialog" aria-modal="true" aria-label={label}><button className="modal-layer__backdrop" type="button" aria-label="Fechar" tabIndex={-1} onClick={onClose}/><section className={`modal ${wide ? 'modal--wide' : ''}`} ref={panel} tabIndex={-1}>{children}</section></div>
 }
 
-function LeadForm({ onClose, onSave }: { onClose: () => void; onSave: (input: { name: string; phone: string; source: string; estimatedValue?: number }) => Promise<void> }) {
+const standardSources = ['Manual', 'Meta Ads', 'Google Ads', 'Instagram', 'Indicação', 'Orgânico', 'WhatsApp']
+
+function LeadForm({ session, onClose, onSave }: { session: Session | null; onClose: () => void; onSave: (input: { name: string; phone: string; source: string; estimatedValue?: number }) => Promise<void> }) {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [source, setSource] = useState('Manual')
+  const [sourceOptions, setSourceOptions] = useState(standardSources)
   const [value, setValue] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  useEffect(() => { if (session) void api.leadSources(session).then((items) => setSourceOptions([...new Set([...standardSources, ...items])])).catch(() => undefined) }, [session])
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true); setError('')
-    try { await onSave({ name, phone, source, estimatedValue: value ? Number(value.replace(',', '.')) : undefined }); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar o lead.') } finally { setSaving(false) }
+    try { await onSave({ name, phone, source: source.trim(), estimatedValue: value ? Number(value.replace(',', '.')) : undefined }); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível criar o lead.') } finally { setSaving(false) }
   }
-  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">NOVO CONTATO</span><h2>Adicionar lead</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}><label>Nome<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contato"/></label><label>WhatsApp<input required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="(85) 99999-9999"/></label><label>Origem<select value={source} onChange={(event) => setSource(event.target.value)}><option>Manual</option><option>Meta Ads</option><option>Google Ads</option><option>Indicação</option><option>Orgânico</option></select></label><label>Valor em negociação <small>opcional</small><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ex.: 1200"/></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Criando...' : 'Criar lead'} <ArrowRight size={16}/></button></form></Modal>
+  return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">NOVO CONTATO</span><h2>Adicionar lead</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><form className="form-stack" onSubmit={submit}><label>Nome<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Nome do contato"/></label><label>WhatsApp<input required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="(85) 99999-9999"/></label><label>Origem <small>Para atribuir a uma campanha, use exatamente o nome registrado em Tráfego pago.</small><input required list="lead-source-options" maxLength={120} value={source} onChange={(event) => setSource(event.target.value)} placeholder="Selecione ou escreva a origem"/><datalist id="lead-source-options">{sourceOptions.map((item) => <option key={item} value={item}/>)}</datalist></label><label>Valor em negociação <small>opcional</small><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ex.: 1200"/></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving} type="submit">{saving ? 'Criando...' : 'Criar lead'} <ArrowRight size={16}/></button></form></Modal>
 }
 
 function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (session: Session) => void }) {
@@ -881,7 +899,7 @@ function Onboarding({ account, onClose, onNavigate }: { account: { uses_automati
 
 function TrialExpired({ onSignOut, account, salesWhatsapp }: { onSignOut: () => void; account: { plan: string; channel_limit: number; plan_price_cents: number }; salesWhatsapp: string }) {
   const whatsapp = salesHref(salesWhatsapp, `Olá! Meu teste do ${planTitle(account.plan)} terminou. Quero ativar ${account.channel_limit} número${account.channel_limit === 1 ? '' : 's'} no CRM.`)
-  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Sua escolha registrada foi <b>{planTitle(account.plan)}</b> com <b>{account.channel_limit} número{account.channel_limit === 1 ? '' : 's'}</b>{account.plan_price_cents > 0 ? ` por ${formatCents(account.plan_price_cents)}/mês` : ''}.</p>{whatsapp ? <a className="primary-button trial-card__contact" href={whatsapp} target="_blank" rel="noreferrer">Falar com a Otimiza AI <ArrowRight size={16}/></a> : <p className="trial-card__contact-note">O contato comercial será configurado pela Otimiza AI antes da publicação.</p>}<button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
+  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Sua escolha registrada foi <b>{planTitle(account.plan)}</b> com <b>{account.channel_limit} número{account.channel_limit === 1 ? '' : 's'}</b>{account.plan_price_cents > 0 ? ` por ${formatCents(account.plan_price_cents)}/mês` : ''}.</p>{whatsapp ? <a className="primary-button trial-card__contact" href={whatsapp} target="_blank" rel="noreferrer">Falar com a Otimiza AI <ArrowRight size={16}/></a> : <p className="trial-card__contact-note">Entre em contato com a equipe Otimiza AI para ativar seu plano. O botão de WhatsApp comercial ainda precisa ser configurado pela equipe.</p>}<button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
 }
 
 type AiInfo = Awaited<ReturnType<typeof api.opportunityAi>>
@@ -894,9 +912,23 @@ const describeAiChange = (applied: AiInfo['events'][number]['applied']) => [
   applied.sale && `Venda detectada de ${money(Number(applied.sale.amount))} (em revisão)`,
 ].filter(Boolean) as string[]
 
-function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void }) {
+function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourceSaved }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void; onSourceSaved: (source: string) => Promise<void> }) {
   const currentIndex = stages.indexOf(lead.stage)
   const [ai, setAi] = useState<AiInfo | null>(null)
+  const [editingSource, setEditingSource] = useState(false)
+  const [source, setSource] = useState(lead.source)
+  const [sourceOptions, setSourceOptions] = useState(standardSources)
+  const [sourceError, setSourceError] = useState('')
+  const [savingSource, setSavingSource] = useState(false)
+  useEffect(() => { setSource(lead.source); setEditingSource(false) }, [lead.id])
+  useEffect(() => { if (session) void api.leadSources(session).then((items) => setSourceOptions([...new Set([...standardSources, ...items])])).catch(() => undefined) }, [session])
+  const saveSource = async (event: FormEvent) => {
+    event.preventDefault()
+    const next = source.trim()
+    if (next.length < 2) return setSourceError('Informe uma origem válida.')
+    setSavingSource(true); setSourceError('')
+    try { await onSourceSaved(next); setEditingSource(false) } catch (reason) { setSourceError(reason instanceof Error ? reason.message : 'Não foi possível salvar a origem.') } finally { setSavingSource(false) }
+  }
   useEffect(() => {
     setAi(null)
     if (!session || !lead.opportunityId) return
@@ -910,7 +942,7 @@ function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale }: { lea
     <div className="drawer__stage"><span>ETAPA ATUAL</span><button type="button">{lead.stage}<ChevronDown size={16}/></button></div>
     {ai?.summary && <div className="drawer__insight"><Sparkles size={18}/><div><b>Leitura da Otimiza AI</b><p>{ai.summary}</p></div></div>}
     {!!ai?.events.length && <section className="drawer__section"><h3>Por que mudou?</h3><ul className="ai-history">{ai.events.map((event) => <li key={event.id}><b>{describeAiChange(event.applied).join(' · ')}</b>{event.reason && <p>{event.reason}</p>}<small>{new Date(event.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></li>)}</ul></section>}
-    <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div></section>
+    <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong><button className="drawer-source-edit" type="button" onClick={() => { setSource(lead.source); setEditingSource(!editingSource) }}>{editingSource ? 'Cancelar' : 'Corrigir origem'}</button></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div>{editingSource && <form className="drawer-source-form" onSubmit={saveSource}><label>Origem ou nome exato da campanha<input required list="drawer-source-options" maxLength={120} value={source} onChange={(event) => setSource(event.target.value)}/><datalist id="drawer-source-options">{sourceOptions.map((item) => <option key={item} value={item}/>)}</datalist></label><button className="primary-button" type="submit" disabled={savingSource}>{savingSource ? 'Salvando...' : 'Salvar origem'}</button>{sourceError && <p className="form-error">{sourceError}</p>}</form>}</section>
     <section className="drawer__section"><h3>Última mensagem</h3><div className="message-preview"><p>{lead.lastMessage}</p><small>{lead.time}</small></div></section>
     <div className="drawer__bottom">{lead.stage !== 'Ganhos' && lead.stage !== 'Perdidos' ? stages[currentIndex + 1] === 'Ganhos' ? <button className="primary-button" onClick={onRegisterSale} type="button">Confirmar venda <CircleDollarSign size={17}/></button> : <button className="primary-button" onClick={onAdvance} type="button">Mover para {stages[currentIndex + 1]} <ArrowRight size={17}/></button> : <button className="primary-button" onClick={onClose} type="button">{lead.stage === 'Ganhos' ? 'Venda confirmada' : 'Lead perdido'} <Goal size={17}/></button>}</div>
   </aside>
@@ -953,6 +985,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [showLeadForm, setShowLeadForm] = useState(false)
   const [showSaleForm, setShowSaleForm] = useState(false)
@@ -1022,7 +1055,8 @@ export default function App() {
       initials: initialsFor(opportunity.contactName ?? opportunity.title),
       stage: stages.includes(stage.name as Stage) ? stage.name as Stage : 'Novos leads',
       channel: 'Comercial',
-      source: (opportunity.source as Lead['source']) || 'Orgânico',
+      source: opportunity.source || 'Não informada',
+      createdAt: opportunity.createdAt,
       value: opportunity.value === null ? undefined : Number(opportunity.value),
       time: opportunity.lastActivityAt ? new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(Math.round((new Date(opportunity.lastActivityAt).getTime() - Date.now()) / 3_600_000), 'hour') : 'agora',
       lastMessage: previewFor(
@@ -1147,7 +1181,7 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (page === 'dashboard') return <Dashboard onNavigate={setPage} onOpenLead={(lead) => { setSelectedLead(lead); setPage('crm') }} onFocusStage={(stage) => { setFocusStage(stage); setPage('crm') }} onSearchLeads={(text) => { setLeadsSearch(text); setPage('leads') }} metrics={metrics} leads={leads} sales={sales} />
+    if (page === 'dashboard') return <Dashboard session={session!} onNavigate={setPage} onOpenLead={(lead) => { setSelectedLead(lead); setPage('crm') }} onFocusStage={(stage) => { setFocusStage(stage); setPage('crm') }} onSearchLeads={(text) => { setLeadsSearch(text); setPage('leads') }} metrics={metrics} leads={leads} sales={sales} />
     if (page === 'crm') return <Crm leads={leads} channel={channel} setChannel={setChannel} onSelectLead={setSelectedLead} onAddLead={addLead} onMoveLead={moveLead} onOpenChat={session ? openLeadChat : undefined} focusStage={focusStage} onFocusHandled={() => setFocusStage(null)} />
     if (page === 'leads') return <LeadsPage key={leadsSearch} initialSearch={leadsSearch} leads={leads} onSelectLead={setSelectedLead} onAddLead={addLead}/>
     if (page === 'conversas') return session ? <ChatPage session={session} initial={conversations} botEnabled={account?.plan === 'chatbot'} /> : <ConversationsPage conversations={conversations}/>
@@ -1170,16 +1204,17 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      {mobileMenuOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}/>}
+      <aside className={`sidebar${mobileMenuOpen ? ' is-mobile-open' : ''}`}>
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name"><span>otimiza <b>AI</b></span><em>CRM</em></div></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account.company_name)}</span><span><b>{account.company_name}</b><small>{account.access_state === 'trial' ? 'Teste gratuito' : `Plano ${account.plan}`}</small></span><ChevronDown size={16}/></button>
-        <nav className="navigation" aria-label="Navegação principal">{workspaceNavItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => setPage(id)}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
-        <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => setPage('chatbot')}><span className="bot-orb"><Bot size={17}/></span><span><b>Automação ativa</b><small>1 número conectado</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => setPage('configuracoes')}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account?.name ?? 'Diego Viana')}/><span><b>{account?.name ?? 'Diego Viana'}</b><small>{account?.role === 'owner' ? 'Administrador' : account?.role ?? 'Demonstração'}</small></span><ChevronDown size={15}/></div></div>
+        <nav className="navigation" aria-label="Navegação principal">{workspaceNavItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => { setPage(id); setMobileMenuOpen(false) }}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
+        <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => { setPage(account.plan === 'chatbot' ? 'chatbot' : 'configuracoes'); setMobileMenuOpen(false) }}><span className="bot-orb"><Bot size={17}/></span><span><b>{account.plan === 'chatbot' ? 'Configurar chatbot' : 'Conectar WhatsApp'}</b><small>{account.plan === 'chatbot' ? 'Respostas por número' : 'Gerenciar integrações'}</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => { setPage('configuracoes'); setMobileMenuOpen(false) }}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account.name)}/><span><b>{account.name}</b><small>{account.role === 'owner' ? 'Administrador' : account.role}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
-      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)}/></>}
-      {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
+      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
+      {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm session={session} onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
       {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
     </div>
   )

@@ -208,7 +208,7 @@ app.get('/api/crm', { preHandler: authenticate }, async (request, reply) => {
   if (!scope) return
   const { rows } = await query(
     `SELECT ps.id, ps.name, ps.position, ps.color, ps.kind,
-       COALESCE(json_agg(json_build_object('id', o.id, 'title', o.title, 'contactName', c.name, 'phone', c.phone_e164, 'temperature', o.temperature, 'value', o.estimated_value, 'source', o.source, 'lastActivityAt', o.last_activity_at) ORDER BY o.last_activity_at DESC) FILTER (WHERE o.id IS NOT NULL), '[]') AS opportunities
+       COALESCE(json_agg(json_build_object('id', o.id, 'title', o.title, 'contactName', c.name, 'phone', c.phone_e164, 'temperature', o.temperature, 'value', o.estimated_value, 'source', o.source, 'createdAt', o.created_at, 'lastActivityAt', o.last_activity_at) ORDER BY o.last_activity_at DESC) FILTER (WHERE o.id IS NOT NULL), '[]') AS opportunities
      FROM pipelines p JOIN pipeline_stages ps ON ps.pipeline_id = p.id
      LEFT JOIN opportunities o ON o.stage_id = ps.id AND o.company_id = $1
      LEFT JOIN contacts c ON c.id = o.contact_id
@@ -221,7 +221,7 @@ app.get('/api/crm', { preHandler: authenticate }, async (request, reply) => {
 const leadSchema = z.object({
   name: z.string().min(2).max(120),
   phone: z.string().min(6).max(30),
-  source: z.string().min(2).max(80).default('Manual'),
+  source: z.string().trim().min(2).max(80).default('Manual'),
   title: z.string().min(2).max(160).optional(),
   estimatedValue: z.coerce.number().min(0).max(99_999_999).optional(),
   temperature: z.enum(['new', 'warm', 'hot']).default('new'),
@@ -268,6 +268,18 @@ app.get('/api/leads', { preHandler: authenticate }, async (request, reply) => {
   return rows
 })
 
+app.get('/api/lead-sources', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  const { rows } = await query<{ source: string }>(
+    `SELECT DISTINCT source FROM (
+       SELECT source FROM traffic_metrics WHERE company_id = $1
+       UNION SELECT source FROM opportunities WHERE company_id = $1
+     ) sources WHERE source IS NOT NULL AND btrim(source) <> '' ORDER BY source`, [scope.companyId],
+  )
+  return rows.map((row) => row.source)
+})
+
 app.post('/api/leads', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply)
   if (!scope) return
@@ -304,6 +316,7 @@ const opportunityUpdateSchema = z.object({
   estimatedValue: z.coerce.number().min(0).max(99_999_999).nullable().optional(),
   temperature: z.enum(['new', 'warm', 'hot']).optional(),
   title: z.string().min(2).max(160).optional(),
+  source: z.string().trim().min(2).max(120).optional(),
 })
 
 app.patch('/api/opportunities/:opportunityId', { preHandler: authenticate }, async (request, reply) => {
@@ -317,12 +330,13 @@ app.patch('/api/opportunities/:opportunityId', { preHandler: authenticate }, asy
   if (!current.rows[0]) return reply.code(404).send({ error: 'Oportunidade não encontrada.' })
   const nextStage = parsed.data.stageId ? await getStage(scope.companyId, parsed.data.stageId) : null
   if (nextStage && nextStage.pipeline_id !== current.rows[0].pipeline_id) return reply.code(400).send({ error: 'A etapa selecionada pertence a outro funil.' })
-  const { rows } = await query(
+  const { rows } = await query<{ id: string; stage_id: string; estimated_value: string | null; temperature: string; title: string; source: string; contact_id: string }>(
     `UPDATE opportunities SET stage_locked_until = now() + interval '12 hours', stage_id = COALESCE($3, stage_id), estimated_value = COALESCE($4, estimated_value),
-       temperature = COALESCE($5, temperature), title = COALESCE($6, title), last_activity_at = now(), updated_at = now()
-     WHERE id = $1 AND company_id = $2 RETURNING id, stage_id, estimated_value, temperature, title`,
-    [params.data.opportunityId, scope.companyId, nextStage?.id ?? null, parsed.data.estimatedValue ?? null, parsed.data.temperature ?? null, parsed.data.title ?? null],
+       temperature = COALESCE($5, temperature), title = COALESCE($6, title), source = COALESCE($7, source), last_activity_at = now(), updated_at = now()
+     WHERE id = $1 AND company_id = $2 RETURNING id, stage_id, estimated_value, temperature, title, source, contact_id`,
+    [params.data.opportunityId, scope.companyId, nextStage?.id ?? null, parsed.data.estimatedValue ?? null, parsed.data.temperature ?? null, parsed.data.title ?? null, parsed.data.source ?? null],
   )
+  if (parsed.data.source) await query('UPDATE contacts SET last_source = $3, updated_at = now() WHERE id = $1 AND company_id = $2', [rows[0].contact_id, scope.companyId, parsed.data.source])
   await query(
     `INSERT INTO audit_logs (company_id, actor_user_id, action, entity_type, entity_id, metadata)
      VALUES ($1, $2, 'updated', 'opportunity', $3, $4::jsonb)`, [scope.companyId, scope.userId, params.data.opportunityId, JSON.stringify(parsed.data)],
@@ -638,6 +652,12 @@ app.post('/api/traffic', { preHandler: authenticate }, async (request, reply) =>
   if (!['owner', 'manager', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode registrar métricas de tráfego.' })
   const parsed = trafficMetricSchema.safeParse(request.body)
   if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados da campanha.', details: parsed.error.flatten().fieldErrors })
+  const existing = await query(
+    `SELECT id FROM traffic_metrics WHERE company_id = $1 AND lower(source) = lower($2)
+      AND period_start <= $4::date AND period_end >= $3::date LIMIT 1`,
+    [scope.companyId, parsed.data.source, parsed.data.periodStart, parsed.data.periodEnd],
+  )
+  if (existing.rowCount) return reply.code(409).send({ error: 'Essa origem já possui uma campanha no período informado. Use outro nome para separar campanhas e evitar contagem duplicada.' })
   try {
     const { rows } = await query(
       `INSERT INTO traffic_metrics (company_id, source, platform, period_start, period_end, spend, reported_leads, impressions, clicks, created_by)

@@ -1,5 +1,7 @@
 FROM node:25-alpine
 
+RUN apk add --no-cache postgresql-client
+
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev

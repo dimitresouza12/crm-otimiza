@@ -26,17 +26,45 @@ Crie um serviço a partir deste repositório do GitHub usando o `Dockerfile` da 
 | `JWT_SECRET` | `openssl rand -base64 48` |
 | `APP_ENCRYPTION_KEY` | `openssl rand -base64 32` |
 | `N8N_WEBHOOK_SECRET` | `openssl rand -hex 32` |
-| `CRM_PUBLIC_URL` | URL pública HTTPS do CRM, por exemplo `https://crm.seudominio.com` |
+| `CRM_PUBLIC_URL` | `https://crm.otimizai.net.br` |
 | `EVOLUTION_API_URL` | URL interna ou HTTPS da Evolution instalada na VPS |
 | `EVOLUTION_API_KEY` | chave global da Evolution, guardada somente no serviço CRM |
-| `ALLOW_ORIGINS` | `https://crm.SEUDOMINIO.com` quando o domínio estiver ativo |
+| `ALLOW_ORIGINS` | `https://crm.otimizai.net.br` |
 | `SALES_WHATSAPP` | Número comercial com DDI e DDD, somente dígitos, usado pelos botões de contato da landing |
 | `UPLOADS_DIR` | Pasta das fotos e áudios do chat. Em produção use `/data/uploads` com volume persistente (já previsto em `deploy/stack.yml`) |
+| `BACKUP_DIR` | Use `/data/backups` em volume persistente; transfira as cópias para fora da VPS |
 | `OPENAI_API_KEY` | Opcional. Chave da OpenAI para transcrever áudios e analisar leads no plano Chatbot. Sem ela, o recurso fica indisponível |
 | `OPENAI_ANALYSIS_MODEL` | Opcional. Modelo da análise das conversas. Padrão `gpt-4.1-mini` |
 | `OPENAI_TRANSCRIBE_MODEL` | Opcional. Modelo de transcrição de áudio. Padrão `gpt-4o-mini-transcribe` |
 
-O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. Quando o subdomínio estiver apontado, associe `crm.SEUDOMINIO.com` ao serviço com HTTPS ativo.
+O comando da imagem executa a migração do banco antes de iniciar a aplicação. Use a porta interna `3000`. O domínio atual é `crm.otimizai.net.br`, com HTTPS.
+
+## Contratação após o teste
+
+O CRM guarda o plano, o limite de números e o valor mensal escolhido no cadastro. **Não há cobrança automática.** Após os 7 dias, os dados são preservados, mas o acesso fica suspenso. Configure `SALES_WHATSAPP` no aplicativo para que o cliente tenha um botão funcional de contratação nessa tela.
+
+Depois de confirmar a contratação e o pagamento pelo processo comercial, execute no terminal do aplicativo:
+
+```sh
+npm run account:activate -- --email cliente@exemplo.com
+npm run account:activate -- --email cliente@exemplo.com --apply
+```
+
+O primeiro comando é uma prévia; o segundo ativa a conta já existente sem apagar dados ou criar outra empresa. Confira o plano, o limite e o valor mostrados na prévia antes de aplicar. Guarde o comprovante da contratação fora do CRM. Para um novo ciclo de cobrança, a equipe precisa acompanhar a renovação manualmente.
+
+## Cópias de segurança
+
+Mantenha o volume persistente já usado em `UPLOADS_DIR=/data/uploads` e adicione outro volume persistente em `BACKUP_DIR=/data/backups`. Se houver arquivos em produção, não troque o ponto de montagem do volume de uploads sem migrá-los. O comando abaixo gera um dump PostgreSQL e, se existirem, os arquivos de mídia do chat. Os arquivos ficam privados para o usuário do processo.
+
+```sh
+npm run db:backup
+```
+
+Agende esse comando diariamente no EasyPanel ou na VPS, copie os diretórios gerados para um armazenamento **privado e criptografado fora da VPS** e teste uma restauração antes de receber clientes. O script prepara o backup, mas não configura agendamento nem armazenamento externo sozinho. Dentro de cada diretório, `sha256sum -c SHA256SUMS` confere a integridade. Para restaurar o banco em uma instalação vazia, use `pg_restore --no-owner --no-acl --dbname="$DATABASE_URL" database.dump`; extraia `uploads.tar.gz` em `UPLOADS_DIR`. Não coloque os backups no Git.
+
+## Origem e investimento
+
+Cadastre cada campanha em *Tráfego pago* com nome próprio e período sem sobreposição para a mesma origem. Ao criar o lead, escolha esse nome no campo *Origem*; leads antigos podem ser corrigidos no detalhe do card. O CRM cruza a origem e a data com vendas **confirmadas**. O investimento é informado manualmente e não é importado da Meta Ads. Origem sem campanha pode aparecer nos relatórios de leads e receita, mas não terá investimento nem ROAS confiável.
 
 ### IA (opcional, plano Chatbot)
 
@@ -61,7 +89,7 @@ No plano Chatbot, o cliente pode configurar respostas por regras para cada núme
 Os fluxos n8n enviam eventos para:
 
 ```text
-POST https://crm.SEUDOMINIO.com/webhooks/n8n/{companyId}
+POST https://crm.otimizai.net.br/webhooks/n8n/{companyId}
 Header: x-otimiza-n8n-secret: valor de N8N_WEBHOOK_SECRET
 ```
 
@@ -76,7 +104,7 @@ As rotas de Meta permanecem preservadas no backend para uma fase futura. Não co
 Depois de publicar, acesse:
 
 ```text
-https://crm.SEUDOMINIO.com/health
+https://crm.otimizai.net.br/health
 ```
 
 O resultado esperado é `status: ok`. Em seguida, conecte um número de teste pela Evolution e leia o QR Code.
