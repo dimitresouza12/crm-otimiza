@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   CircleHelp,
   CheckCircle2,
+  CalendarDays,
   ClipboardCheck,
   Clock3,
   ArrowUpRight,
@@ -405,7 +406,7 @@ function Dashboard({ onNavigate, onOpenLead, onFocusStage, onSearchLeads, metric
     <>
       <section className="page-head">
         <div><span className="eyebrow">VISÃO GERAL · SETEMBRO</span><h1>Seu atendimento está convertendo mais.</h1><p>Veja o que gerou receita e onde sua equipe pode agir agora.</p></div>
-        <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><button className="period-button" type="button"><span>01–30 set. 2026</span><ChevronDown size={16} /></button></div>
+        <div className="head-actions"><button className="icon-button" type="button" title={areValuesVisible ? 'Ocultar números' : 'Mostrar números'} aria-label={areValuesVisible ? 'Ocultar números do Dashboard' : 'Mostrar números do Dashboard'} aria-pressed={!areValuesVisible} onClick={() => setAreValuesVisible((current) => !current)}>{areValuesVisible ? <Eye size={17}/> : <EyeOff size={17}/>}</button><button className="period-button" type="button" aria-label="Selecionar período dos resultados"><CalendarDays size={15}/><span>Setembro de 2026</span><ChevronDown size={16} /></button></div>
       </section>
       <section className="metric-grid">
         <MetricCard title="Receita confirmada" value={showMoney(revenue)} trend={areValuesVisible ? `${confirmedSales} venda${confirmedSales === 1 ? '' : 's'} confirmada${confirmedSales === 1 ? '' : 's'}` : 'Vendas confirmadas'} emphasis tone="revenue" onOpen={() => setOpenMetric('revenue')} />
