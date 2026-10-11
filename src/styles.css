@@ -645,3 +645,12 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .kanban-strip__name { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; white-space: nowrap; writing-mode: vertical-rl; transform: rotate(180deg); }
 .kanban-strip b { display: grid; min-width: 24px; height: 24px; place-items: center; color: var(--lavender-deep); border-radius: 99px; background: #ece9ff; font-size: 11px; }
 .kanban-strip small { color: var(--muted); font-size: 10px; white-space: nowrap; writing-mode: vertical-rl; transform: rotate(180deg); }
+
+/* Botão do WhatsApp no card: verde oficial, um pouco maior para o símbolo ficar legível */
+.lead-card__chat--whatsapp { width: 27px; height: 27px; background: #25d366; box-shadow: 0 3px 8px rgba(37, 211, 102, .28); }
+.lead-card__chat--whatsapp:hover, .lead-card__chat--whatsapp:focus-visible { background: #128c7e; }
+.lead-card__chat--whatsapp:focus-visible { outline: 3px solid var(--lavender); outline-offset: 2px; }
+
+/* Modo compacto: o botão do WhatsApp acompanha a altura do nome, sem alargar o card */
+.lead-card--compact .lead-card__chat--whatsapp { width: 22px; height: 22px; border-radius: 6px; box-shadow: none; }
+.lead-card--compact .lead-card__chat--whatsapp svg { width: 14px; height: 14px; }
