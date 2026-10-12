@@ -73,6 +73,20 @@ test('só itens sem preço: perguntar o valor não inventa lista de valores', ()
   assert.equal(chooseBotReply({ settings: onlyService, rules, text: 'fale da consultoria', isFirstMessage: false, now: open })?.text, '• Consultoria — Sob consulta')
 })
 
+test('cumprimento no meio da conversa recebe as boas-vindas, não o "não entendi"', () => {
+  for (const text of ['boa tarde', 'Boa tarde!', 'Bom dia, tudo bem?', 'oii', 'Olá', 'e aí, tudo bem']) {
+    assert.equal(chooseBotReply({ settings, rules, text, isFirstMessage: false, now: open })?.source, 'welcome', text)
+  }
+  // frases com conteúdo continuam seguindo as regras normais
+  assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, qual o endereço?', isFirstMessage: false, now: open })?.ruleId, 'r1')
+  assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, queria falar com alguém', isFirstMessage: false, now: open })?.source, 'fallback')
+  assert.equal(chooseBotReply({ settings, rules, text: 'bem', isFirstMessage: false, now: open })?.source, 'fallback')
+  // fora do horário, o cumprimento recebe a mensagem de fechado
+  assert.equal(chooseBotReply({ settings, rules, text: 'boa noite', isFirstMessage: false, now: sunday })?.source, 'off_hours')
+  // sem boas-vindas configuradas, nada muda
+  assert.equal(chooseBotReply({ settings: { ...settings, welcome_message: null }, rules, text: 'boa tarde', isFirstMessage: false, now: open })?.source, 'fallback')
+})
+
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {
   assert.equal(chooseBotReply({ settings, rules, text: 'oi', isFirstMessage: true, now: open })?.source, 'welcome')
   assert.equal(chooseBotReply({ settings, rules, text: 'blá', isFirstMessage: false, now: open })?.source, 'fallback')

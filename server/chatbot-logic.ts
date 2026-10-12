@@ -48,6 +48,14 @@ const priceWords = ['preco', 'precos', 'valor', 'valores', 'quanto custa', 'quan
 // Quem pergunta pelos serviços ou produtos quer ver a lista do catálogo, mesmo sem falar em preço.
 const catalogWords = ['servico', 'servicos', 'produto', 'produtos', 'catalogo', 'cardapio', 'o que voces fazem', 'o que voces vendem', 'o que voces oferecem', 'o que voces tem', 'trabalham com', 'trabalhamos com']
 
+// "oi", "boa tarde", "tudo bem?" valem como cumprimento mesmo no meio da conversa, não como "não entendi".
+const greetingWords = new Set(['oi', 'oie', 'oii', 'oiii', 'ola', 'opa', 'eae', 'eai', 'e', 'ai', 'bom', 'boa', 'dia', 'tarde', 'noite', 'tudo', 'bem', 'td', 'como', 'vai', 'voce', 'ta', 'gente', 'pessoal'])
+const greetingStarters = new Set(['oi', 'oie', 'oii', 'oiii', 'ola', 'opa', 'eae', 'eai', 'bom', 'boa', 'tudo', 'td'])
+export const isGreeting = (foldedText: string) => {
+  const tokens = foldedText.replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean)
+  return tokens.length > 0 && tokens.length <= 5 && tokens.every((token) => greetingWords.has(token)) && tokens.some((token) => greetingStarters.has(token))
+}
+
 export const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ')
 
 const hasPrice = (item: CatalogItem) => item.price !== null && Number(item.price) >= 0
@@ -87,7 +95,7 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
   const offHours = settings.off_hours_message?.trim()
   const welcome = settings.welcome_message?.trim() || rules.find((rule) => rule.trigger_type === 'first_message')?.response_text.trim()
   const promotion = settings.promotion_message?.trim()
-  if (input.isFirstMessage) {
+  if (input.isFirstMessage || isGreeting(folded)) {
     if (outside && offHours) return { text: offHours, source: 'off_hours' }
     const firstReply = [welcome, settings.promotion_in_welcome && promotion ? promotion : ''].filter(Boolean).join('\n\n')
     if (firstReply) return { text: firstReply, source: 'welcome' }
