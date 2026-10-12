@@ -5,6 +5,7 @@ import { api, type BotRuleData, type BotSettingsData, type BotSettingsInput, typ
 type Form = {
   active: boolean
   ai: boolean
+  handoff: boolean
   welcome: string
   promotion: string
   promotionInWelcome: boolean
@@ -24,6 +25,7 @@ const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 const toForm = (settings: BotSettingsData): Form => ({
   active: settings.is_active,
   ai: settings.ai_enabled,
+  handoff: settings.handoff_on_fallback ?? false,
   welcome: settings.welcome_message ?? '',
   promotion: settings.promotion_message ?? '',
   promotionInWelcome: settings.promotion_in_welcome ?? false,
@@ -80,7 +82,7 @@ const topicTemplates = [
 ]
 
 const sourceLabel: Record<string, string> = {
-  keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
+  schedule: 'Pedido de reunião ou horário: a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
 
@@ -199,7 +201,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     setSaving(true); setError(''); setNotice('')
     try {
       const draft = draftFromForm(form)
-      const result = await api.saveChatbotSettings(session, { isActive: form.active, aiEnabled: form.ai, ...draft })
+      const result = await api.saveChatbotSettings(session, { isActive: form.active, aiEnabled: form.ai, handoffOnFallback: form.handoff, ...draft })
       const currentPromotion = rules.find((rule) => rule.name === promotionRuleName)
       if (form.promotion.trim()) {
         const input = { name: promotionRuleName, triggerValue: promotionKeywords, responseText: form.promotion.trim() }
@@ -270,6 +272,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
           <label>Quando o bot não entender <small>resposta padrão</small>
             <textarea rows={3} value={form.fallback} onChange={(event) => update({ fallback: event.target.value })} placeholder="Não entendi 🤔 Você pode perguntar sobre preços, horários ou endereço. Se preferir, aguarde que um atendente responde." />
           </label>
+          <Toggle checked={form.handoff} onChange={(value) => update({ handoff: value })} label="Quando o bot não entender, passar para um atendente" hint="O bot para de responder nessa conversa e o pedido aparece no lead, para você assumir. Ele volta quando você retomar ou depois de 12 horas." />
         </section>
 
         <section className="panel bot-card bot-card--promotion">

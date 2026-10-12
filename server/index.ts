@@ -15,7 +15,7 @@ import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { chooseBotReply, defaultBusinessHours, isWithinBusinessHours, splitKeywords, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, splitKeywords, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
 import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
@@ -214,7 +214,8 @@ app.get('/api/crm', { preHandler: authenticate }, async (request, reply) => {
   if (!scope) return
   const { rows } = await query(
     `SELECT ps.id, ps.name, ps.position, ps.color, ps.kind,
-       COALESCE(json_agg(json_build_object('id', o.id, 'title', o.title, 'contactName', c.name, 'phone', c.phone_e164, 'temperature', o.temperature, 'value', o.estimated_value, 'source', o.source, 'createdAt', o.created_at, 'lastActivityAt', o.last_activity_at) ORDER BY o.last_activity_at DESC) FILTER (WHERE o.id IS NOT NULL), '[]') AS opportunities
+       COALESCE(json_agg(json_build_object('id', o.id, 'title', o.title, 'contactName', c.name, 'phone', c.phone_e164, 'temperature', o.temperature, 'value', o.estimated_value, 'source', o.source, 'createdAt', o.created_at, 'lastActivityAt', o.last_activity_at,
+         'requests', (SELECT COALESCE(json_agg(json_build_object('id', r.id, 'kind', r.kind, 'text', r.customer_text, 'when', r.requested_when, 'at', r.updated_at) ORDER BY r.updated_at DESC), '[]'::json) FROM lead_requests r WHERE r.opportunity_id = o.id AND r.status = 'pending')) ORDER BY o.last_activity_at DESC) FILTER (WHERE o.id IS NOT NULL), '[]') AS opportunities
      FROM pipelines p JOIN pipeline_stages ps ON ps.pipeline_id = p.id
      LEFT JOIN opportunities o ON o.stage_id = ps.id AND o.company_id = $1
      LEFT JOIN contacts c ON c.id = o.contact_id
@@ -348,6 +349,21 @@ app.patch('/api/opportunities/:opportunityId', { preHandler: authenticate }, asy
      VALUES ($1, $2, 'updated', 'opportunity', $3, $4::jsonb)`, [scope.companyId, scope.userId, params.data.opportunityId, JSON.stringify(parsed.data)],
   )
   return rows[0]
+})
+
+app.post('/api/lead-requests/:requestId/resolve', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply)
+  if (!scope) return
+  if (!['owner', 'manager', 'agent', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Você não pode tratar pedidos de clientes.' })
+  const params = z.object({ requestId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Pedido inválido.' })
+  const { rows } = await query<{ id: string; conversation_id: string }>(
+    `UPDATE lead_requests SET status = 'done', resolved_at = now(), resolved_by = $3, updated_at = now()
+     WHERE id = $1 AND company_id = $2 AND status = 'pending' RETURNING id, conversation_id`, [params.data.requestId, scope.companyId, scope.userId],
+  )
+  if (!rows[0]) return reply.code(404).send({ error: 'Pedido não encontrado ou já tratado.' })
+  publishChat(scope.companyId, rows[0].conversation_id)
+  return { id: rows[0].id, status: 'done' }
 })
 
 const saleSchema = z.object({
@@ -1029,12 +1045,12 @@ const chatbotScope = async (request: FastifyRequest, reply: FastifyReply) => {
   return scope
 }
 
-const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome'
-type BotSettingsRow = BotSettings & { ai_enabled: boolean }
+const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback'
+type BotSettingsRow = BotSettings & { ai_enabled: boolean; handoff_on_fallback: boolean }
 
 const emptyBotSettings: BotSettingsRow = {
   is_active: false, welcome_message: '', fallback_message: '', off_hours_message: '', business_hours: defaultBusinessHours,
-  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true, promotion_message: '', promotion_in_welcome: false,
+  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true, promotion_message: '', promotion_in_welcome: false, handoff_on_fallback: false,
 }
 
 const loadBotSettings = async (companyId: string): Promise<BotSettingsRow> => {
@@ -1079,7 +1095,7 @@ const botSettingsFields = {
   promotionMessage: z.string().max(2000).optional(),
   promotionInWelcome: z.boolean().optional(),
 }
-const chatbotSettingsSchema = z.object({ isActive: z.boolean(), aiEnabled: z.boolean().optional(), ...botSettingsFields })
+const chatbotSettingsSchema = z.object({ isActive: z.boolean(), aiEnabled: z.boolean().optional(), handoffOnFallback: z.boolean().optional(), ...botSettingsFields })
 const clean = (value: string | undefined) => value?.trim() || null
 
 app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, reply) => {
@@ -1089,14 +1105,14 @@ app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, r
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Configuração do chatbot inválida.' })
   const input = parsed.data
   const { rows } = await query(
-    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true), $11, COALESCE($12::boolean, false))
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true), $11, COALESCE($12::boolean, false), COALESCE($13::boolean, false))
      ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, off_hours_message = EXCLUDED.off_hours_message,
        business_hours = COALESCE($6::jsonb, chatbot_settings.business_hours), bot_mode = COALESCE($7::text, chatbot_settings.bot_mode), catalog = COALESCE($8::jsonb, chatbot_settings.catalog),
        price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), promotion_message = EXCLUDED.promotion_message,
-       promotion_in_welcome = COALESCE($12::boolean, chatbot_settings.promotion_in_welcome), updated_at = now()
+       promotion_in_welcome = COALESCE($12::boolean, chatbot_settings.promotion_in_welcome), handoff_on_fallback = COALESCE($13::boolean, chatbot_settings.handoff_on_fallback), updated_at = now()
      RETURNING ${botColumns}`,
-    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null, clean(input.promotionMessage), input.promotionInWelcome ?? null],
+    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null, clean(input.promotionMessage), input.promotionInWelcome ?? null, input.handoffOnFallback ?? null],
   )
   return rows[0]
 })
@@ -1319,7 +1335,30 @@ const handleHumanOnPhone = async (companyId: string, incoming: { messageId: stri
   publishChat(companyId, incoming.conversationId)
 }
 
-const unheardAudioReply = 'Recebi seu áudio, mas não consegui ouvi-lo agora 😕 Pode escrever sua dúvida em texto, por favor?'
+// Pedidos que precisam de uma pessoa ficam no lead (reunião/horário e "chamar atendente") para o usuário do CRM decidir.
+const recordLeadRequest = async (companyId: string, conversationId: string, kind: 'meeting' | 'handoff', customerText: string | null, requestedWhen: string | null) => {
+  const lead = await query<{ id: string }>(
+    `SELECT o.id FROM conversations c JOIN opportunities o ON o.company_id = c.company_id AND o.contact_id = c.contact_id
+     WHERE c.id = $1 AND c.company_id = $2 ORDER BY o.updated_at DESC LIMIT 1`, [conversationId, companyId],
+  )
+  await query(
+    `INSERT INTO lead_requests (company_id, opportunity_id, conversation_id, kind, customer_text, requested_when)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (conversation_id, kind) WHERE status = 'pending' DO UPDATE SET
+       customer_text = EXCLUDED.customer_text, requested_when = COALESCE(EXCLUDED.requested_when, lead_requests.requested_when),
+       opportunity_id = COALESCE(lead_requests.opportunity_id, EXCLUDED.opportunity_id), updated_at = now()`,
+    [companyId, lead.rows[0]?.id ?? null, conversationId, kind, customerText, requestedWhen],
+  )
+  publishChat(companyId, conversationId)
+}
+
+// Vale para qualquer conta, com o chatbot ligado ou não: se o cliente pediu reunião ou deu um horário, o lead mostra.
+const noteCustomerRequest = async (companyId: string, conversationId: string, text: string | null) => {
+  const meeting = text?.trim() ? detectMeetingRequest(text) : null
+  if (meeting && text) await recordLeadRequest(companyId, conversationId, 'meeting', text.trim().slice(0, 500), meeting.when)
+}
+
+const unheardAudioReply ='Recebi seu áudio, mas não consegui ouvi-lo agora 😕 Pode escrever sua dúvida em texto, por favor?'
 
 const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string; unheardAudio?: boolean }) => {
   const metadata = record(connection.metadata)
@@ -1360,6 +1399,11 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
      ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'bot', raw_payload = EXCLUDED.raw_payload`,
     [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
   )
+  // "Vou chamar um especialista" só é verdade se alguém for avisado: o bot para nesta conversa e o lead mostra o pedido.
+  if (settings.handoff_on_fallback && normalChoice?.source === 'fallback' && !incoming.unheardAudio) {
+    await query(`UPDATE conversations SET bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [incoming.conversationId])
+    await recordLeadRequest(connection.company_id, incoming.conversationId, 'handoff', incoming.body?.trim().slice(0, 500) || null, null)
+  }
   scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ err: error }, 'Falha na análise por IA'))
   publishChat(connection.company_id, incoming.conversationId)
 }
@@ -1457,6 +1501,7 @@ app.post('/webhooks/uazapi/:connectionId', async (request, reply) => {
   const event = String(payload.event ?? payload.type ?? '').toLowerCase()
   if (event.includes('message') || record(payload.data ?? payload.message).key || record(payload.data ?? payload.message).message) {
     const incoming = await saveWhatsAppMessage(connection, payload)
+    if (incoming && incoming.inbound && incoming.isNew) void noteCustomerRequest(connection.company_id, incoming.conversationId, incoming.body).catch((error) => app.log.error({ err: error }, 'Falha ao registrar pedido do cliente'))
     if (incoming && incoming.inbound && incoming.isNew) void sendChatbotResponse(connection, incoming).catch((error) => app.log.error(error, 'Não foi possível enviar resposta do chatbot'))
   }
   if (event.includes('connection')) {
@@ -1502,6 +1547,7 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
         if (incoming.inbound) {
           void (async () => {
             const body = incoming.body ?? (isAudio ? await media : null)
+            await noteCustomerRequest(connection.company_id, incoming.conversationId, body).catch((error) => app.log.error({ err: error }, 'Falha ao registrar pedido do cliente'))
             await sendChatbotResponse(connection, { ...incoming, body, unheardAudio: isAudio && !body })
           })().catch((error) => app.log.error({ err: error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
         }

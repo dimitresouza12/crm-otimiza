@@ -15,7 +15,7 @@ export type BotSettings = {
   promotion_in_welcome?: boolean
 }
 export type BotRule = { id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }
-export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback'; ruleId?: string }
+export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule'; ruleId?: string }
 
 export const defaultBusinessHours: BusinessHours = { enabled: false, days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }
 
@@ -47,6 +47,49 @@ const priceWords = ['preco', 'precos', 'valor', 'valores', 'quanto custa', 'quan
 
 // Quem pergunta pelos serviços ou produtos quer ver a lista do catálogo, mesmo sem falar em preço.
 const catalogWords = ['servico', 'servicos', 'produto', 'produtos', 'catalogo', 'cardapio', 'o que voces fazem', 'o que voces vendem', 'o que voces oferecem', 'o que voces tem', 'trabalham com', 'trabalhamos com']
+
+// Pedido de reunião, demonstração ou horário. Serve para avisar a equipe no lead e para o bot não cair no "não entendi".
+const meetingIntent = /\b(reuni(?:ao|oes)|agend\w*|marcar|remarcar|demonstra\w*|demo|apresenta(?:r|cao)|visita|videochamada|video chamada|call|me ligar|ligacao|me mostr\w+|mostrar (?:o|a|um|uma|seu|sua|os|as) \w+|conhecer (?:o|a) \w+)\b/
+const clockTime = /\b\d{1,2}\s?(?:h|hs|hr|hrs|horas?)\b|\b\d{1,2}:\d{2}\b/
+const dayWord = /\b(?:hoje|amanha|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|semana que vem|proxima semana)\b/
+const dayPart = /\b(?:manha|tarde|noite|almoco)\b/
+
+export type MeetingRequest = { kind: 'intent' | 'schedule'; when: string | null }
+
+// Sem acento e em minúsculas, letra a letra, para achar trechos e recortá-los do texto original (com acento e maiúsculas).
+const foldWithMap = (text: string) => {
+  let folded = ''
+  const origin: number[] = []
+  for (let index = 0; index < text.length; index++) {
+    const piece = text[index].normalize('NFD').replace(/[̀-ͯ]/g, '').toLocaleLowerCase('pt-BR')
+    for (const char of piece) { folded += char; origin.push(index) }
+  }
+  return { folded, origin }
+}
+
+// Trecho do dia e da hora que o cliente citou ("amanhã de manhã", "hoje às 16h"), do jeito que ele escreveu.
+const quotedWhen = (text: string, folded: string, origin: number[]) => {
+  const spans = [clockTime, dayWord, dayPart].map((pattern) => new RegExp(pattern.source).exec(folded)).filter((match): match is RegExpExecArray => Boolean(match))
+    .map((match) => ({ start: origin[match.index], end: origin[match.index + match[0].length - 1] + 1 })).sort((a, b) => a.start - b.start)
+  if (!spans.length) return null
+  const first = spans[0].start
+  const last = Math.max(...spans.map((span) => span.end))
+  const slice = last - first <= 50 ? text.slice(first, last) : spans.map((span) => text.slice(span.start, span.end)).join(' · ')
+  return slice.trim().slice(0, 160)
+}
+
+// Devolve null quando a mensagem não pede nada. "when" vem preenchido quando o cliente já disse dia/horário.
+export const detectMeetingRequest = (text: string): MeetingRequest | null => {
+  const { folded, origin } = foldWithMap(text)
+  const schedule = clockTime.test(folded) || (dayWord.test(folded) && dayPart.test(folded))
+  if (schedule) return { kind: 'schedule', when: quotedWhen(text, folded, origin) }
+  return meetingIntent.test(folded) ? { kind: 'intent', when: null } : null
+}
+
+export const scheduleReplies = {
+  intent: 'Claro! 😊 Me diga o dia e o horário que ficam melhores para você, que um atendente confirma.',
+  schedule: 'Anotado! 😊 Um atendente vai confirmar esse horário com você em instantes.',
+}
 
 // "oi", "boa tarde", "tudo bem?" valem como cumprimento mesmo no meio da conversa, não como "não entendi".
 const greetingWords = new Set(['oi', 'oie', 'oii', 'oiii', 'ola', 'opa', 'eae', 'eai', 'e', 'ai', 'bom', 'boa', 'dia', 'tarde', 'noite', 'tudo', 'bem', 'td', 'como', 'vai', 'voce', 'ta', 'gente', 'pessoal'])
@@ -91,6 +134,9 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
     if (priced.length && priceWords.some((word) => containsKeyword(folded, word))) return { text: `Nossos valores:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
     if (catalogWords.some((word) => containsKeyword(folded, word))) return { text: `O que oferecemos:\n${priceLines(named.slice(0, 20))}`, source: 'price' }
   }
+
+  const meeting = detectMeetingRequest(input.text)
+  if (meeting) return { text: scheduleReplies[meeting.kind], source: 'schedule' }
 
   const offHours = settings.off_hours_message?.trim()
   const welcome = settings.welcome_message?.trim() || rules.find((rule) => rule.trigger_type === 'first_message')?.response_text.trim()

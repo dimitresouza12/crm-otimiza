@@ -654,3 +654,20 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 /* Modo compacto: o botão do WhatsApp acompanha a altura do nome, sem alargar o card */
 .lead-card--compact .lead-card__chat--whatsapp { width: 22px; height: 22px; border-radius: 6px; box-shadow: none; }
 .lead-card--compact .lead-card__chat--whatsapp svg { width: 14px; height: 14px; }
+
+/* Pedidos do cliente (reunião, horário, atendente): selo no card e painel no detalhe do lead */
+.lead-card__alerts { display: flex; flex-wrap: wrap; gap: 5px; margin: 2px 0 0; }
+.lead-alert { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1.5; }
+.lead-alert--meeting { color: #8a4b00; background: #fff1d6; }
+.lead-alert--handoff { color: #a3332c; background: #fde4e2; }
+.drawer__requests ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.drawer__requests li { display: grid; gap: 8px; padding: 12px; border: 1px solid #f3d9a4; border-radius: 12px; background: #fffaf0; }
+.drawer__requests li.request--handoff { border-color: #f1b9b5; background: #fff6f5; }
+.request__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.request__head b { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 13px; }
+.request__head small { color: var(--muted); font-size: 11px; }
+.request__when { margin: 0; color: var(--ink); font-size: 12px; }
+.drawer__requests blockquote { margin: 0; padding: 8px 10px; color: var(--ink); border-left: 3px solid #e7b95a; border-radius: 4px; background: #fff; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.drawer__requests li.request--handoff blockquote { border-left-color: #e08a84; }
+.request__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.request__actions button { flex: 1 1 auto; min-height: 38px; font-size: 12px; }

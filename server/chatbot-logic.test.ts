@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, isWithinBusinessHours, splitKeywords, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, scheduleReplies, splitKeywords, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -85,6 +85,30 @@ test('cumprimento no meio da conversa recebe as boas-vindas, não o "não entend
   assert.equal(chooseBotReply({ settings, rules, text: 'boa noite', isFirstMessage: false, now: sunday })?.source, 'off_hours')
   // sem boas-vindas configuradas, nada muda
   assert.equal(chooseBotReply({ settings: { ...settings, welcome_message: null }, rules, text: 'boa tarde', isFirstMessage: false, now: open })?.source, 'fallback')
+})
+
+test('pedido de reunião ou horário é reconhecido e recebe resposta própria', () => {
+  assert.deepEqual(detectMeetingRequest('hoje as 16h da tarde'), { kind: 'schedule', when: 'hoje as 16h da tarde' })
+  assert.deepEqual(detectMeetingRequest('Amanhã de manhã'), { kind: 'schedule', when: 'Amanhã de manhã' })
+  assert.deepEqual(detectMeetingRequest('pode ser às 15:30?'), { kind: 'schedule', when: '15:30' })
+  // só o trecho de dia e hora, com o acento e a caixa que o cliente usou
+  assert.equal(detectMeetingRequest('Podemos marcar uma reunião AMANHÃ de manhã? Obrigado!')?.when, 'AMANHÃ de manhã')
+  assert.equal(detectMeetingRequest('na sexta, lá pelas 14h, pode ser?')?.when, 'sexta, lá pelas 14h')
+  // citações espalhadas pela frase viram uma lista curta, sem copiar o texto todo
+  assert.equal(detectMeetingRequest('sexta de manhã ou então hoje, bem cedo, antes das 9h')?.when, 'sexta · manhã · 9h')
+  assert.deepEqual(detectMeetingRequest('quero marcar uma reunião'), { kind: 'intent', when: null })
+  assert.equal(detectMeetingRequest('pode me mostrar o sistema de advocacia')?.kind, 'intent')
+  assert.equal(detectMeetingRequest('queria uma demonstração')?.kind, 'intent')
+  for (const text of ['tem promoção hoje?', 'boa tarde', 'qual o endereço?', 'quanto custa?', 'obrigado']) assert.equal(detectMeetingRequest(text), null, text)
+
+  const ask = (text: string) => chooseBotReply({ settings, rules, text, isFirstMessage: false, now: open })
+  assert.deepEqual(ask('hoje as 16h da tarde'), { text: scheduleReplies.schedule, source: 'schedule' })
+  assert.deepEqual(ask('quero marcar uma reunião'), { text: scheduleReplies.intent, source: 'schedule' })
+  // um assunto cadastrado pelo cliente do CRM vence a resposta pronta
+  const own: BotRule[] = [...rules, { id: 'r3', trigger_type: 'keyword', trigger_value: 'reunião, agendar', response_text: 'Nossa agenda: seg a sex, 9h às 18h.' }]
+  assert.equal(chooseBotReply({ settings, rules: own, text: 'quero marcar uma reunião', isFirstMessage: false, now: open })?.ruleId, 'r3')
+  // "quanto custa o corte hoje?" continua sendo pergunta de preço
+  assert.equal(ask('quanto custa o corte hoje?')?.source, 'price')
 })
 
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {

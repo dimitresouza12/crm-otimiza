@@ -40,7 +40,7 @@ import {
   X,
 } from 'lucide-react'
 import otimizaSymbol from './assets/otimiza-ai-symbol.svg'
-import { api, type Session } from './lib/api'
+import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 import { connectEvents, onChatEvent } from './lib/events'
@@ -66,7 +66,11 @@ type Lead = {
   temperature: 'Quente' | 'Morno' | 'Novo'
   owner: string
   avatar: string
+  requests?: LeadRequestData[]
 }
+
+const requestLabel = { meeting: 'Pediu reunião ou horário', handoff: 'Quer falar com um atendente' } as const
+const requestBadge = { meeting: 'Reunião', handoff: 'Atendente' } as const
 
 const stages: Stage[] = ['Novos leads', 'Qualificados', 'Proposta enviada', 'Negociação', 'Ganhos', 'Perdidos']
 const channels: Channel[] = ['Todos os canais', 'Comercial', 'Unidade Aldeota', 'Pós-venda']
@@ -252,12 +256,19 @@ const compactTime = (value: string) => {
   return `${match[1]} ${unit}`
 }
 
+function RequestBadges({ lead }: { lead: Lead }) {
+  const kinds = [...new Set((lead.requests ?? []).map((request) => request.kind))]
+  if (!kinds.length) return null
+  return <div className="lead-card__alerts">{kinds.map((kind) => <span key={kind} className={`lead-alert lead-alert--${kind}`} title={(lead.requests ?? []).find((request) => request.kind === kind)?.text ?? requestLabel[kind]}>{kind === 'meeting' ? <CalendarDays size={11} /> : <MessageCircleMore size={11} />}{requestBadge[kind]}</span>)}</div>
+}
+
 function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd, compact = false }: { lead: Lead; onClick: () => void; onOpenChat?: () => void; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; compact?: boolean }) {
   if (compact) {
     return (
       <button className="lead-card lead-card--compact" onClick={onClick} type="button" draggable={Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} title={`${lead.name} · ${lead.source} · ${lead.channel}`}>
         <div className="lead-card__head"><Avatar initials={lead.initials} small /><strong>{lead.name}</strong>{onOpenChat && <span className="lead-card__actions"><span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={17} /></span></span>}</div>
         <p>{lead.lastMessage}</p>
+        <RequestBadges lead={lead} />
         <div className="lead-card__foot"><LeadInterest temperature={lead.temperature} /><span className="lead-card__time" title={lead.time}>{compactTime(lead.time)}</span><b>{lead.value ? money(lead.value) : '—'}</b></div>
       </button>
     )
@@ -270,6 +281,7 @@ function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd, compact =
       </div>
       <div className="lead-card__name-row"><strong>{lead.name}</strong>{onOpenChat && <span className="lead-card__actions"><span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={17} /></span></span>}</div>
       <p>{lead.lastMessage}</p>
+      <RequestBadges lead={lead} />
       <div className="lead-card__tags"><span>{lead.source}</span><span>{lead.channel}</span></div>
       <div className="lead-card__footer">
         <span><Clock3 size={14} />{lead.time}</span>
@@ -965,8 +977,14 @@ const describeAiChange = (applied: AiInfo['events'][number]['applied']) => [
   applied.sale && `Venda detectada de ${money(Number(applied.sale.amount))} (em revisão)`,
 ].filter(Boolean) as string[]
 
-function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourceSaved }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void; onSourceSaved: (source: string) => Promise<void> }) {
+function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourceSaved, onOpenChat, onResolveRequest }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void; onSourceSaved: (source: string) => Promise<void>; onOpenChat?: () => void; onResolveRequest: (requestId: string) => Promise<void> }) {
   const currentIndex = stages.indexOf(lead.stage)
+  const [resolving, setResolving] = useState<string | null>(null)
+  const [requestError, setRequestError] = useState('')
+  const resolveRequest = async (requestId: string) => {
+    setResolving(requestId); setRequestError('')
+    try { await onResolveRequest(requestId) } catch (reason) { setRequestError(reason instanceof Error ? reason.message : 'Não foi possível marcar como tratado.') } finally { setResolving(null) }
+  }
   const [ai, setAi] = useState<AiInfo | null>(null)
   const [editingSource, setEditingSource] = useState(false)
   const [source, setSource] = useState(lead.source)
@@ -993,6 +1011,12 @@ function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourc
     <header className="drawer__header"><button onClick={onClose} type="button" aria-label="Fechar detalhes"><X size={20}/></button><span>DETALHE DO LEAD</span><button type="button" aria-label="Mais ações"><MoreHorizontal size={21}/></button></header>
     <div className="drawer__person"><Avatar initials={lead.initials}/><div><h2>{lead.name}</h2><p>{lead.phone ? `+${lead.phone.replace(/\D/g, '')}` : 'Sem telefone'}</p></div><button className="icon-button" type="button" aria-label="Abrir WhatsApp"><MessageCircleMore size={18}/></button></div>
     <div className="drawer__stage"><span>ETAPA ATUAL</span><button type="button">{lead.stage}<ChevronDown size={16}/></button></div>
+    {!!lead.requests?.length && <section className="drawer__section drawer__requests"><h3>Precisa da sua atenção</h3>{requestError && <p className="form-error">{requestError}</p>}<ul>{lead.requests.map((request) => <li key={request.id} className={`request--${request.kind}`}>
+      <div className="request__head"><b>{request.kind === 'meeting' ? <CalendarDays size={15} /> : <MessageCircleMore size={15} />}{requestLabel[request.kind]}</b><small>{new Date(request.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></div>
+      {request.when && <p className="request__when">Horário citado: <strong>{request.when}</strong></p>}
+      {request.text && <blockquote>“{request.text}”</blockquote>}
+      <div className="request__actions">{onOpenChat && <button className="secondary-button" type="button" onClick={onOpenChat}>Abrir conversa</button>}<button className="primary-button" type="button" disabled={resolving === request.id} onClick={() => void resolveRequest(request.id)}>{resolving === request.id ? 'Salvando...' : 'Marcar como tratado'}</button></div>
+    </li>)}</ul></section>}
     {ai?.summary && <div className="drawer__insight"><Sparkles size={18}/><div><b>Leitura da Otimiza AI</b><p>{ai.summary}</p></div></div>}
     {!!ai?.events.length && <section className="drawer__section"><h3>Por que mudou?</h3><ul className="ai-history">{ai.events.map((event) => <li key={event.id}><b>{describeAiChange(event.applied).join(' · ')}</b>{event.reason && <p>{event.reason}</p>}<small>{new Date(event.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></li>)}</ul></section>}
     <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong><button className="drawer-source-edit" type="button" onClick={() => { setSource(lead.source); setEditingSource(!editingSource) }}>{editingSource ? 'Cancelar' : 'Corrigir origem'}</button></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div>{editingSource && <form className="drawer-source-form" onSubmit={saveSource}><label>Origem ou nome exato da campanha<input required list="drawer-source-options" maxLength={120} value={source} onChange={(event) => setSource(event.target.value)}/><datalist id="drawer-source-options">{sourceOptions.map((item) => <option key={item} value={item}/>)}</datalist></label><button className="primary-button" type="submit" disabled={savingSource}>{savingSource ? 'Salvando...' : 'Salvar origem'}</button>{sourceError && <p className="form-error">{sourceError}</p>}</form>}</section>
@@ -1128,6 +1152,7 @@ export default function App() {
       temperature: temperatureLabel[opportunity.temperature] ?? 'Novo',
       owner: me.name,
       avatar: initialsFor(me.name),
+      requests: opportunity.requests ?? [],
     })))
     setStageIds(Object.fromEntries(crm.map((stage) => [stage.name, stage.id])))
     setMetrics({ confirmedRevenue: Number(dashboard.confirmed_revenue), confirmedSales: Number(dashboard.confirmed_sales), openLeads: Number(dashboard.open_leads), averageTicket: Number(dashboard.average_ticket), leadsThisMonth: Number(dashboard.leads_this_month) })
@@ -1275,7 +1300,7 @@ export default function App() {
       </aside>
       <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
-      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
+      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onOpenChat={selectedLead.phone ? () => { openLeadChat(selectedLead); setSelectedLead(null) } : undefined} onResolveRequest={async (requestId) => { if (!session) throw new Error('Entre no CRM para continuar.'); await api.resolveLeadRequest(session, requestId); setSelectedLead((lead) => lead ? { ...lead, requests: (lead.requests ?? []).filter((request) => request.id !== requestId) } : lead); await loadWorkspace(session) }} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm session={session} onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
       {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
     </div>
