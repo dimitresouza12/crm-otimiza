@@ -45,6 +45,16 @@ test('citar um item responde só o preço dele', () => {
   assert.equal(reply?.text, '• Barba: R$ 30,00')
 })
 
+test('perguntar pelos serviços ou produtos mostra o catálogo, mesmo sem falar em preço', () => {
+  for (const text of ['queria saber sobre seus serviços', 'quais produtos vocês têm?', 'me manda o cardápio', 'o que vocês fazem?']) {
+    const reply = chooseBotReply({ settings, rules, text, isFirstMessage: false, now: open })
+    assert.equal(reply?.source, 'price', text)
+    assert.match(reply?.text ?? '', /^O que oferecemos:\n• Corte: R\$ 40,00/, text)
+  }
+  assert.equal(chooseBotReply({ settings: { ...settings, price_replies_enabled: false }, rules, text: 'quais serviços?', isFirstMessage: false, now: open })?.source, 'fallback')
+  assert.equal(chooseBotReply({ settings: { ...settings, catalog: [] }, rules, text: 'quais serviços?', isFirstMessage: false, now: open })?.source, 'fallback')
+})
+
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {
   assert.equal(chooseBotReply({ settings, rules, text: 'oi', isFirstMessage: true, now: open })?.source, 'welcome')
   assert.equal(chooseBotReply({ settings, rules, text: 'blá', isFirstMessage: false, now: open })?.source, 'fallback')

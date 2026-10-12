@@ -45,6 +45,9 @@ const nameWords = (name: string) => foldText(name).split(/[^a-z0-9]+/).filter((w
 
 const priceWords = ['preco', 'precos', 'valor', 'valores', 'quanto custa', 'quanto custam', 'quanto e', 'quanto fica', 'quanto sai', 'quanto cobra', 'tabela', 'orcamento']
 
+// Quem pergunta pelos serviços ou produtos quer ver a lista do catálogo, mesmo sem falar em preço.
+const catalogWords = ['servico', 'servicos', 'produto', 'produtos', 'catalogo', 'cardapio', 'o que voces fazem', 'o que voces vendem', 'o que voces oferecem', 'o que voces tem', 'trabalham com', 'trabalhamos com']
+
 export const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ')
 
 const priceLines = (items: CatalogItem[]) => items.map((item) => `• ${item.name}: ${formatMoney(Number(item.price))}${item.description?.trim() ? ` — ${item.description.trim()}` : ''}`).join('\n')
@@ -74,6 +77,7 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
     const mentioned = fullName.length ? fullName : priced.filter((item) => nameWords(item.name).some((word) => containsKeyword(folded, word)))
     if (mentioned.length) return { text: priceLines(mentioned), source: 'price' }
     if (priceWords.some((word) => containsKeyword(folded, word))) return { text: `Nossos valores:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
+    if (catalogWords.some((word) => containsKeyword(folded, word))) return { text: `O que oferecemos:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
   }
 
   const offHours = settings.off_hours_message?.trim()
