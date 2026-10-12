@@ -1,4 +1,4 @@
-﻿# PublicaÃ§Ã£o no EasyPanel
+# PublicaÃ§Ã£o no EasyPanel
 
 O CRM usa um Ãºnico aplicativo conectado ao PostgreSQL interno. Crie apenas o banco e um serviÃ§o de aplicaÃ§Ã£o no mesmo projeto do EasyPanel.
 
