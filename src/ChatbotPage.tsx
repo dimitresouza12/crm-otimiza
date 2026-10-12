@@ -35,7 +35,7 @@ const toForm = (settings: BotSettingsData): Form => ({
   end: settings.business_hours.end,
   mode: settings.bot_mode,
   priceReplies: settings.price_replies_enabled,
-  catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : String(item.price).replace('.', ','), description: item.description ?? '' })),
+  catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : Number(item.price).toFixed(2).replace('.', ','), description: item.description ?? '' })),
 })
 
 const parsePrice = (value: string) => {
@@ -84,7 +84,12 @@ const sourceLabel: Record<string, string> = {
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
 
-const promotionRuleName = 'Promoção atual'
+const silentLabel = {
+  inside_hours: 'Silêncio porque o modo é "só fora do horário" e este horário é de atendimento. Marque "Simular fora do horário" ou escolha "Sempre".',
+  nothing_matched: 'Nenhum assunto nem preço casou com essa frase, e a mensagem de "não entendi" (passo 2) está vazia. Preencha-a para o bot sempre responder algo.',
+}
+
+const promotionRuleName ='Promoção atual'
 const promotionKeywords = 'promoção, promocoes, desconto, oferta, cupom, tem promoção, tem desconto'
 
 function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (value: boolean) => void; label: string; hint?: string }) {
@@ -142,19 +147,48 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
   const [conversation, setConversation] = useState<Array<{ from: 'client' | 'bot'; text: string; note?: string }>>([])
   const [uazapi, setUazapi] = useState({ channelName: 'Comercial', phone: '', serverUrl: '', instance: '', token: '' })
 
-  const load = useCallback(async () => {
+  const draftKey = session ? `otimiza.bot.draft.${session.companyId}` : ''
+
+  // keepForm: recarrega a lista de assuntos sem apagar o que a pessoa já digitou nas outras partes da tela.
+  const load = useCallback(async (options: { keepForm?: boolean } = {}) => {
     if (!session) return
     setError('')
     try {
       const result = await api.chatbot(session)
-      setSaved(result.settings); setForm(toForm(result.settings)); setRules(result.rules); setChannels(result.channels); setAiAvailable(result.aiAvailable)
+      setSaved(result.settings); setRules(result.rules); setChannels(result.channels); setAiAvailable(result.aiAvailable)
+      if (options.keepForm) return
+      const base = toForm(result.settings)
+      let restored: Form | null = null
+      try {
+        const raw = draftKey ? window.localStorage.getItem(draftKey) : null
+        const draft = raw ? JSON.parse(raw) as Partial<Form> : null
+        if (draft && typeof draft.welcome === 'string' && Array.isArray(draft.days) && Array.isArray(draft.catalog) && JSON.stringify({ ...base, ...draft }) !== JSON.stringify(base)) restored = { ...base, ...draft }
+      } catch { /* sem rascunho utilizável: segue com o que está salvo */ }
+      setForm(restored ?? base)
+      if (restored) setNotice('Recuperamos o que você tinha digitado e não salvou. Confira e clique em "Salvar alterações".')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') }
     finally { setLoading(false) }
-  }, [session])
+  }, [session, draftKey])
 
   useEffect(() => { void load() }, [load])
 
   const dirty = useMemo(() => Boolean(saved && form && JSON.stringify(toForm(saved)) !== JSON.stringify(form)), [saved, form])
+
+  // O rascunho fica guardado no navegador enquanto houver alterações não salvas, e some assim que salvar ou descartar.
+  useEffect(() => {
+    if (!draftKey || !form || !saved) return
+    try {
+      if (dirty) window.localStorage.setItem(draftKey, JSON.stringify(form))
+      else window.localStorage.removeItem(draftKey)
+    } catch { /* armazenamento indisponível: o aviso ao sair continua valendo */ }
+  }, [dirty, form, saved, draftKey])
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
   const update = (patch: Partial<Form>) => setForm((current) => current ? { ...current, ...patch } : current)
 
   if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24} /></div><span className="eyebrow">CHATBOT</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar seu WhatsApp e ensinar o chatbot a responder seus clientes.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16} /></button></section>
@@ -172,13 +206,14 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         if (currentPromotion) await api.updateChatbotRule(session, currentPromotion.id, { ...input, isActive: true })
         else await api.createChatbotRule(session, input)
       } else if (currentPromotion?.is_active) await api.updateChatbotRule(session, currentPromotion.id, { isActive: false })
-      setSaved(result); setForm(toForm(result)); await load(); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
+      try { window.localStorage.removeItem(draftKey) } catch { /* ignorar */ }
+      setSaved(result); setForm(toForm(result)); await load({ keepForm: true }); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar.') } finally { setSaving(false) }
   }
 
   const runRule = async (work: () => Promise<unknown>, success?: string) => {
     setError(''); setNotice('')
-    try { await work(); await load(); if (success) setNotice(success) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível concluir.') }
+    try { await work(); await load({ keepForm: true }); if (success) setNotice(success) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível concluir.') }
   }
 
   const sendTest = async () => {
@@ -187,7 +222,8 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     setTesting(true); setError('')
     try {
       const reply = await api.chatbotTest(session, { message, firstMessage: testFirst, at: testOutside ? outsideHoursInstant(form) : undefined, draft: draftFromForm(form) })
-      setConversation((current) => [...current, { from: 'client', text: message }, { from: 'bot', text: reply.reply ?? 'O bot ficaria em silêncio.', note: sourceLabel[reply.source] + (reply.ruleName ? `: ${reply.ruleName}` : '') }])
+      const note = reply.reply === null ? silentLabel[reply.silentReason ?? 'nothing_matched'] : sourceLabel[reply.source] + (reply.ruleName ? `: ${reply.ruleName}` : '')
+      setConversation((current) => [...current, { from: 'client', text: message }, { from: 'bot', text: reply.reply ?? 'O bot ficaria em silêncio.', note }])
       setTestText(''); setTestFirst(false)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível testar.') } finally { setTesting(false) }
   }

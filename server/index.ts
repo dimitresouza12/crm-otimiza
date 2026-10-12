@@ -1172,7 +1172,9 @@ app.post('/api/chatbot/test', { preHandler: authenticate, config: { rateLimit: {
   const rules = (await loadBotRules(scope.companyId)).filter((rule) => rule.is_active)
   const now = parsed.data.at ? new Date(parsed.data.at) : new Date()
   const choice = chooseBotReply({ settings, rules, text: parsed.data.message, isFirstMessage: parsed.data.firstMessage, now })
-  return { reply: choice?.text ?? null, source: choice?.source ?? 'silent', ruleName: rules.find((rule) => rule.id === choice?.ruleId)?.name ?? null, withinHours: isWithinBusinessHours(settings.business_hours, now) }
+  const withinHours = isWithinBusinessHours(settings.business_hours, now)
+  const silentReason = choice ? null : settings.bot_mode === 'outside_hours' && settings.business_hours.enabled && withinHours ? 'inside_hours' : 'nothing_matched'
+  return { reply: choice?.text ?? null, source: choice?.source ?? 'silent', ruleName: rules.find((rule) => rule.id === choice?.ruleId)?.name ?? null, withinHours, silentReason }
 })
 
 const safeEqual = (a: string, b: string) => {
