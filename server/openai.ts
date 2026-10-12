@@ -23,16 +23,29 @@ const authorized = async (path: string, init: RequestInit, timeoutMs: number) =>
   return response
 }
 
-export const transcribeAudio = async (audio: Buffer, mimeType: string, fileName: string) => {
+const backupTranscribeModel = 'whisper-1'
+
+const transcribeWith = async (model: string, audio: Buffer, mimeType: string, fileName: string) => {
   const form = new FormData()
   form.append('file', new Blob([new Uint8Array(audio)], { type: mimeType.split(';')[0] || 'audio/ogg' }), fileName)
-  form.append('model', process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || 'gpt-4o-mini-transcribe')
+  form.append('model', model)
   form.append('language', 'pt')
   form.append('response_format', 'json')
   const response = await authorized('/audio/transcriptions', { method: 'POST', body: form }, 60_000)
   const body = await response.json().catch(() => ({})) as { text?: unknown }
   const text = typeof body.text === 'string' ? body.text.trim() : ''
   return text || null
+}
+
+export const transcribeAudio = async (audio: Buffer, mimeType: string, fileName: string) => {
+  const model = process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || 'gpt-4o-mini-transcribe'
+  try {
+    return await transcribeWith(model, audio, mimeType, fileName)
+  } catch (error) {
+    // Modelo não liberado para este projeto (400/403/404): tenta o modelo clássico antes de desistir.
+    if (model !== backupTranscribeModel && error instanceof OpenAIError && [400, 403, 404].includes(error.status)) return transcribeWith(backupTranscribeModel, audio, mimeType, fileName)
+    throw error
+  }
 }
 
 export const temperatures = ['new', 'warm', 'hot'] as const

@@ -427,7 +427,7 @@ const storeAgentMessage = async (target: { company_id: string; conversation_id: 
     [target.company_id, target.conversation_id, externalId, input.type, input.body, input.mediaPath ?? null, input.mediaMime ?? null, input.mediaName ?? null, input.quote?.externalId ?? null, input.quote?.text.slice(0, 500) ?? null, input.quote?.from ?? null],
   )
   await query(`UPDATE conversations SET last_message_at = now(), bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [target.conversation_id])
-  scheduleAnalysis(target.conversation_id, (error) => app.log.error({ error }, 'Falha na análise por IA'))
+  scheduleAnalysis(target.conversation_id, (error) => app.log.error({ err: error }, 'Falha na análise por IA'))
   publishChat(target.company_id, target.conversation_id)
   return rows[0]
 }
@@ -1301,7 +1301,7 @@ const attachInboundMedia = async (connection: EvolutionConnection, incoming: { m
   await query('UPDATE messages SET media_path = $2, media_mime = $3, media_name = $4, message_type = $5 WHERE id = $1', [incoming.messageId, path, mime, fileName, kind])
   publishChat(connection.company_id, incoming.conversationId)
   if (kind !== 'audio' || !(await aiEnabledFor(connection.company_id))) return null
-  const transcript = await transcribeAudio(Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64'), mime, fileName ?? 'audio.ogg').catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao transcrever áudio'); return null })
+  const transcript = await transcribeAudio(Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64'), mime, fileName ?? 'audio.ogg').catch((error) => { app.log.error({ err: error, connectionId: connection.id }, 'Falha ao transcrever áudio'); return null })
   if (!transcript) return null
   await query('UPDATE messages SET transcript = $2 WHERE id = $1', [incoming.messageId, transcript])
   publishChat(connection.company_id, incoming.conversationId)
@@ -1319,7 +1319,9 @@ const handleHumanOnPhone = async (companyId: string, incoming: { messageId: stri
   publishChat(companyId, incoming.conversationId)
 }
 
-const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string }) => {
+const unheardAudioReply = 'Recebi seu áudio, mas não consegui ouvi-lo agora 😕 Pode escrever sua dúvida em texto, por favor?'
+
+const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string; unheardAudio?: boolean }) => {
   const metadata = record(connection.metadata)
   const serverUrl = typeof metadata.serverUrl === 'string' ? metadata.serverUrl.replace(/\/$/, '') : ''
   if (!connection.access_token_encrypted) return
@@ -1333,7 +1335,9 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
     query<{ total: string }>(`SELECT count(*)::text AS total FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`, [incoming.conversationId]),
     loadBotRules(connection.company_id).then((all) => all.filter((rule) => rule.is_active)),
   ])
-  const choice = chooseBotReply({ settings, rules, text: incoming.body ?? '', isFirstMessage: Number(countRows[0]?.total ?? 0) === 1 })
+  const normalChoice = chooseBotReply({ settings, rules, text: incoming.body ?? '', isFirstMessage: Number(countRows[0]?.total ?? 0) === 1 })
+  // Áudio que não pôde ser transcrito não é "frase sem sentido": pede o texto, em vez de mandar o "não entendi".
+  const choice: { text: string; ruleId?: string } | null = normalChoice && incoming.unheardAudio ? { text: unheardAudioReply } : normalChoice
   if (!choice) return
   const responseText = choice.text
   const rule = choice.ruleId ? { id: choice.ruleId } : undefined
@@ -1356,7 +1360,7 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
      ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'bot', raw_payload = EXCLUDED.raw_payload`,
     [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
   )
-  scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA'))
+  scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ err: error }, 'Falha na análise por IA'))
   publishChat(connection.company_id, incoming.conversationId)
 }
 
@@ -1493,15 +1497,15 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
       if (incoming && incoming.isNew) {
         const messageKeys = Object.keys(record(incoming.data.message))
         const isAudio = (mediaKinds[incoming.messageType] ?? mediaKinds[messageKeys.find((key) => key in mediaKinds) ?? '']) === 'audio'
-        const media = attachInboundMedia(connection, incoming).catch((error) => { app.log.error({ error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'); return null })
-        if (!incoming.inbound) void handleHumanOnPhone(connection.company_id, incoming).catch((error) => app.log.error({ error }, 'Falha ao pausar o chatbot'))
+        const media = attachInboundMedia(connection, incoming).catch((error) => { app.log.error({ err: error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'); return null })
+        if (!incoming.inbound) void handleHumanOnPhone(connection.company_id, incoming).catch((error) => app.log.error({ err: error }, 'Falha ao pausar o chatbot'))
         if (incoming.inbound) {
           void (async () => {
             const body = incoming.body ?? (isAudio ? await media : null)
-            await sendChatbotResponse(connection, { ...incoming, body })
-          })().catch((error) => app.log.error({ error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
+            await sendChatbotResponse(connection, { ...incoming, body, unheardAudio: isAudio && !body })
+          })().catch((error) => app.log.error({ err: error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
         }
-        void media.finally(() => scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ error }, 'Falha na análise por IA')))
+        void media.finally(() => scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ err: error }, 'Falha na análise por IA')))
       }
     } else if (event === 'messagesupdate') {
       const updates = Array.isArray(payload.data) ? payload.data : [payload.data]
@@ -1529,7 +1533,7 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
     await query('UPDATE whatsapp_connections SET last_event_at = now(), updated_at = now() WHERE id = $1', [connection.id])
     return reply.code(200).send({ received: true })
   } catch (error) {
-    app.log.error({ error, connectionId: connection.id }, 'Falha ao processar evento Evolution')
+    app.log.error({ err: error, connectionId: connection.id }, 'Falha ao processar evento Evolution')
     await query('UPDATE integration_events SET error = $2 WHERE id = $1', [inserted.rows[0].id, error instanceof Error ? error.message.slice(0, 300) : 'Erro inesperado'])
     return reply.code(500).send({ error: 'Não foi possível processar o evento.' })
   }
