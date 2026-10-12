@@ -55,6 +55,24 @@ test('perguntar pelos serviços ou produtos mostra o catálogo, mesmo sem falar 
   assert.equal(chooseBotReply({ settings: { ...settings, catalog: [] }, rules, text: 'quais serviços?', isFirstMessage: false, now: open })?.source, 'fallback')
 })
 
+test('item sem preço também é respondido, com nome e detalhe', () => {
+  const withService: BotSettings = { ...settings, catalog: [...settings.catalog, { name: 'Consultoria jurídica', price: null, description: 'Análise do seu caso e orientação. Valor sob consulta.' }] }
+  const asked = chooseBotReply({ settings: withService, rules, text: 'como funciona a consultoria?', isFirstMessage: false, now: open })
+  assert.equal(asked?.source, 'price')
+  assert.equal(asked?.text, '• Consultoria jurídica — Análise do seu caso e orientação. Valor sob consulta.')
+  const listed = chooseBotReply({ settings: withService, rules, text: 'quais serviços vocês têm?', isFirstMessage: false, now: open })
+  assert.match(listed?.text ?? '', /^O que oferecemos:\n• Corte: R\$ 40,00/)
+  assert.match(listed?.text ?? '', /• Consultoria jurídica — Análise/)
+  const priceList = chooseBotReply({ settings: withService, rules, text: 'quanto custa?', isFirstMessage: false, now: open })
+  assert.doesNotMatch(priceList?.text ?? '', /Consultoria/)
+})
+
+test('só itens sem preço: perguntar o valor não inventa lista de valores', () => {
+  const onlyService: BotSettings = { ...settings, catalog: [{ name: 'Consultoria', price: null, description: 'Sob consulta' }] }
+  assert.equal(chooseBotReply({ settings: onlyService, rules, text: 'quanto custa?', isFirstMessage: false, now: open })?.source, 'fallback')
+  assert.equal(chooseBotReply({ settings: onlyService, rules, text: 'fale da consultoria', isFirstMessage: false, now: open })?.text, '• Consultoria — Sob consulta')
+})
+
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {
   assert.equal(chooseBotReply({ settings, rules, text: 'oi', isFirstMessage: true, now: open })?.source, 'welcome')
   assert.equal(chooseBotReply({ settings, rules, text: 'blá', isFirstMessage: false, now: open })?.source, 'fallback')

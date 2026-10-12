@@ -1066,7 +1066,7 @@ const businessHoursSchema = z.object({ enabled: z.boolean(), days: z.array(z.num
 const catalogSchema = z.array(z.object({
   name: z.string().trim().min(1).max(80),
   price: z.coerce.number().min(0).max(10_000_000).nullable(),
-  description: z.string().trim().max(160).optional(),
+  description: z.string().trim().max(400).optional(),
 })).max(60)
 const botSettingsFields = {
   welcomeMessage: z.string().max(2000).optional(),

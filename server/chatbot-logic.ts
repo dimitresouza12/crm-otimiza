@@ -50,7 +50,10 @@ const catalogWords = ['servico', 'servicos', 'produto', 'produtos', 'catalogo', 
 
 export const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ')
 
-const priceLines = (items: CatalogItem[]) => items.map((item) => `• ${item.name}: ${formatMoney(Number(item.price))}${item.description?.trim() ? ` — ${item.description.trim()}` : ''}`).join('\n')
+const hasPrice = (item: CatalogItem) => item.price !== null && Number(item.price) >= 0
+
+// Item sem preço também é respondido: sai o nome e o detalhe, sem valor.
+const priceLines = (items: CatalogItem[]) => items.map((item) => `• ${item.name}${hasPrice(item) ? `: ${formatMoney(Number(item.price))}` : ''}${item.description?.trim() ? ` — ${item.description.trim()}` : ''}`).join('\n')
 
 export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[]; text: string; isFirstMessage: boolean; now?: Date }): BotReply | null => {
   const { settings, rules } = input
@@ -70,14 +73,15 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
   }
   if (best) return { text: best.rule.response_text, source: 'keyword', ruleId: best.rule.id }
 
-  const priced = settings.catalog.filter((item) => item.name.trim() && item.price !== null && Number(item.price) >= 0)
-  if (settings.price_replies_enabled && priced.length) {
-    const fullName = priced.filter((item) => { const name = foldText(item.name); return name.length >= 3 && folded.includes(name) })
+  const named = settings.catalog.filter((item) => item.name.trim())
+  if (settings.price_replies_enabled && named.length) {
+    const fullName = named.filter((item) => { const name = foldText(item.name); return name.length >= 3 && folded.includes(name) })
     // Sem o nome inteiro, vale uma palavra do nome ("combo" encontra "Combo corte + barba").
-    const mentioned = fullName.length ? fullName : priced.filter((item) => nameWords(item.name).some((word) => containsKeyword(folded, word)))
+    const mentioned = fullName.length ? fullName : named.filter((item) => nameWords(item.name).some((word) => containsKeyword(folded, word)))
     if (mentioned.length) return { text: priceLines(mentioned), source: 'price' }
-    if (priceWords.some((word) => containsKeyword(folded, word))) return { text: `Nossos valores:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
-    if (catalogWords.some((word) => containsKeyword(folded, word))) return { text: `O que oferecemos:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
+    const priced = named.filter(hasPrice)
+    if (priced.length && priceWords.some((word) => containsKeyword(folded, word))) return { text: `Nossos valores:\n${priceLines(priced.slice(0, 20))}`, source: 'price' }
+    if (catalogWords.some((word) => containsKeyword(folded, word))) return { text: `O que oferecemos:\n${priceLines(named.slice(0, 20))}`, source: 'price' }
   }
 
   const offHours = settings.off_hours_message?.trim()

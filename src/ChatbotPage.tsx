@@ -51,7 +51,7 @@ const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabl
   const catalog = form.catalog.filter((item) => item.name.trim() || item.price.trim()).map((item) => {
     if (!item.name.trim()) throw new Error('Dê um nome para cada item da lista de preços.')
     const price = parsePrice(item.price)
-    if (price === null || Number.isNaN(price)) throw new Error(`Informe o valor de "${item.name.trim()}" (exemplo: 40 ou 39,90).`)
+    if (Number.isNaN(price)) throw new Error(`O valor de "${item.name.trim()}" não parece um número (exemplo: 40 ou 39,90). Deixe em branco se não tiver preço fixo.`)
     return { name: item.name.trim(), price, description: item.description.trim() || undefined }
   })
   return {
@@ -300,15 +300,15 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar “quanto custa?”, o bot responde com estes valores.</p></div></div>
-          <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
+          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus produtos e preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar por um item, pelos seus serviços ou “quanto custa?”, o bot responde com o nome, o valor e o detalhe. Sem preço fixo? Deixe o valor em branco.</p></div></div>
+          <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder sobre produtos e preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
           <div className="bot-catalog">
-            {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$)</span><span>Detalhe <small>opcional</small></span><span /></div>}
+            {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$) <small>opcional</small></span><span>Detalhe <small>opcional</small></span><span /></div>}
             {form.catalog.map((item, index) => (
               <div className="bot-catalog__row" key={index}>
                 <input aria-label="Produto ou serviço" value={item.name} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, name: event.target.value } : row) })} placeholder="Corte de cabelo" />
                 <input aria-label="Valor" inputMode="decimal" value={item.price} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, price: event.target.value } : row) })} placeholder="40,00" />
-                <input aria-label="Detalhe" value={item.description} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, description: event.target.value } : row) })} placeholder="Tesoura ou máquina" />
+                <input aria-label="Detalhe" maxLength={400} value={item.description} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, description: event.target.value } : row) })} placeholder="Tesoura ou máquina" />
                 <button className="bot-icon" type="button" aria-label="Remover item" onClick={() => update({ catalog: form.catalog.filter((_, position) => position !== index) })}><X size={16} /></button>
               </div>
             ))}
