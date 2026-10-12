@@ -1214,7 +1214,8 @@ const saveWhatsAppMessage = async (connection: { id: string; company_id: string;
   const externalId = String(key.id ?? data.id ?? data.messageId ?? '')
   if (!phone || phone.length < 8 || !externalId || isGroup) return false
   const fromMe = Boolean(key.fromMe ?? data.fromMe ?? data.from_me)
-  const pushName = String(data.pushName ?? data.push_name ?? data.senderName ?? data.name ?? '') || null
+  // Em mensagens enviadas por nós, o pushName é o nome do dono do número conectado, não o do contato.
+  const pushName = fromMe ? null : String(data.pushName ?? data.push_name ?? data.senderName ?? data.name ?? '') || null
   const body = pickText(data.text) ?? pickText(message) ?? pickText(data.content)
   const messageType = String(data.type ?? data.messageType ?? Object.keys(message)[0] ?? 'text')
   const sentAt = uazapiTimestamp(data.timestamp ?? data.messageTimestamp ?? key.timestamp)
