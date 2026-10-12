@@ -29,6 +29,12 @@ const app = Fastify({
   logger: {
     level: config.nodeEnv === 'production' ? 'info' : 'debug',
     redact: ['req.headers.authorization', 'req.headers["x-otimiza-webhook-secret"]', 'req.body.accessToken', 'req.body.instanceToken'],
+    serializers: {
+      // O segredo do webhook viaja na URL (?secret=); não pode aparecer nos logs.
+      req(request) {
+        return { method: request.method, url: request.url?.replace(/([?&]secret=)[^&]*/i, '$1***'), host: request.host, remoteAddress: request.ip }
+      },
+    },
   },
 })
 
@@ -1480,6 +1486,7 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
   try {
     if (event === 'messagesupsert') {
       const incoming = await saveWhatsAppMessage(connection, payload)
+      app.log.info({ connectionId: connection.id, event, saved: Boolean(incoming), isNew: incoming?.isNew, inbound: incoming?.inbound }, 'Evento Evolution processado')
       if (incoming && incoming.isNew) {
         const messageKeys = Object.keys(record(incoming.data.message))
         const isAudio = (mediaKinds[incoming.messageType] ?? mediaKinds[messageKeys.find((key) => key in mediaKinds) ?? '']) === 'audio'
