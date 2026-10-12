@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, scheduleReplies, splitKeywords, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, isWithinBusinessHours, scheduleReplies, splitKeywords, wantsHuman, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -79,7 +79,8 @@ test('cumprimento no meio da conversa recebe as boas-vindas, não o "não entend
   }
   // frases com conteúdo continuam seguindo as regras normais
   assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, qual o endereço?', isFirstMessage: false, now: open })?.ruleId, 'r1')
-  assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, queria falar com alguém', isFirstMessage: false, now: open })?.source, 'fallback')
+  assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, queria falar com alguém', isFirstMessage: false, now: open })?.source, 'human')
+  assert.equal(chooseBotReply({ settings, rules, text: 'boa tarde, tenho uma dúvida complicada', isFirstMessage: false, now: open })?.source, 'fallback')
   assert.equal(chooseBotReply({ settings, rules, text: 'bem', isFirstMessage: false, now: open })?.source, 'fallback')
   // fora do horário, o cumprimento recebe a mensagem de fechado
   assert.equal(chooseBotReply({ settings, rules, text: 'boa noite', isFirstMessage: false, now: sunday })?.source, 'off_hours')
@@ -90,7 +91,7 @@ test('cumprimento no meio da conversa recebe as boas-vindas, não o "não entend
 test('pedido de reunião ou horário é reconhecido e recebe resposta própria', () => {
   assert.deepEqual(detectMeetingRequest('hoje as 16h da tarde'), { kind: 'schedule', when: 'hoje as 16h da tarde' })
   assert.deepEqual(detectMeetingRequest('Amanhã de manhã'), { kind: 'schedule', when: 'Amanhã de manhã' })
-  assert.deepEqual(detectMeetingRequest('pode ser às 15:30?'), { kind: 'schedule', when: '15:30' })
+  assert.deepEqual(detectMeetingRequest('pode ser às 15:30?'), { kind: 'schedule', when: 'às 15:30' })
   // só o trecho de dia e hora, com o acento e a caixa que o cliente usou
   assert.equal(detectMeetingRequest('Podemos marcar uma reunião AMANHÃ de manhã? Obrigado!')?.when, 'AMANHÃ de manhã')
   assert.equal(detectMeetingRequest('na sexta, lá pelas 14h, pode ser?')?.when, 'sexta, lá pelas 14h')
@@ -109,6 +110,50 @@ test('pedido de reunião ou horário é reconhecido e recebe resposta própria',
   assert.equal(chooseBotReply({ settings, rules: own, text: 'quero marcar uma reunião', isFirstMessage: false, now: open })?.ruleId, 'r3')
   // "quanto custa o corte hoje?" continua sendo pergunta de preço
   assert.equal(ask('quanto custa o corte hoje?')?.source, 'price')
+})
+
+test('"queria uma reunião amanhã 9h" não cai no assunto de horário de funcionamento', () => {
+  const hoursRule: BotRule = { id: 'h1', trigger_type: 'keyword', trigger_value: 'horário, horas, que horas, funcionamento, abre, fecha', response_text: 'Atendemos de segunda a sexta, das 9h às 18h.' }
+  const withHours = [...rules, hoursRule]
+  const ask = (text: string) => chooseBotReply({ settings, rules: withHours, text, isFirstMessage: false, now: open })
+  for (const text of ['queria uma reunião amanhã 9h', 'Queria uma reunião amanhã às 9 horas.', 'gostaria de marcar uma demonstração hoje às nove horas', 'pode ser uma reunião amanhã às 9?']) {
+    assert.deepEqual(ask(text), { text: scheduleReplies.schedule, source: 'schedule' }, text)
+  }
+  // perguntas sobre o horário da empresa continuam indo para o assunto cadastrado
+  for (const text of ['que horas vocês abrem?', 'qual o horário de funcionamento?', 'vocês fecham às 18h?']) assert.equal(ask(text)?.ruleId, 'h1', text)
+  // só o horário, sem pedir reunião (resposta à pergunta do bot): o assunto de horas ainda vence
+  assert.equal(ask('amanhã às 9 horas')?.ruleId, 'h1')
+})
+
+test('horários escritos de vários jeitos são reconhecidos', () => {
+  for (const text of ['9h', '9h30', '09:00', '9 horas', 'nove horas', '9 da manhã', 'meio-dia', 'meio dia', 'amanhã às 9', 'sexta às 15', 'hoje à tarde']) {
+    assert.equal(detectMeetingRequest(text)?.kind, 'schedule', text)
+  }
+  for (const text of ['as 2 camisas', 'tenho 2 filhos', 'moro no 9', 'quero 3 unidades']) assert.equal(detectMeetingRequest(text), null, text)
+  assert.equal(detectMeetingRequest('amanhã às 9 horas')?.when, 'amanhã às 9 horas')
+})
+
+test('pedido explícito por um atendente passa para uma pessoa', () => {
+  const ask = (text: string) => chooseBotReply({ settings, rules, text, isFirstMessage: false, now: open })
+  for (const text of ['quero falar com um atendente', 'pode me passar para alguém?', 'chama o responsável', 'prefiro falar com uma pessoa', 'quero um humano']) {
+    assert.deepEqual(ask(text), { text: humanReply, source: 'human' }, text)
+    assert.equal(wantsHuman(text), true, text)
+  }
+  assert.equal(wantsHuman('qual o endereço?'), false)
+  // um assunto cadastrado pela empresa continua vencendo
+  const own: BotRule[] = [...rules, { id: 'r9', trigger_type: 'keyword', trigger_value: 'atendente', response_text: 'Nosso atendimento é pelo WhatsApp mesmo.' }]
+  assert.equal(chooseBotReply({ settings, rules: own, text: 'quero falar com um atendente', isFirstMessage: false, now: open })?.ruleId, 'r9')
+})
+
+test('"ok", "obrigado" e emoji não recebem o "não entendi"', () => {
+  const ask = (text: string, isFirstMessage = false) => chooseBotReply({ settings, rules, text, isFirstMessage, now: open })
+  for (const text of ['ok', 'Obrigado!', 'muito obrigada', 'valeu', 'blz', 'beleza, combinado', 'fechado', '👍', '🙏🙏', 'sim', 'Certo.']) assert.equal(ask(text), null, text)
+  // o que tem conteúdo continua sendo respondido
+  assert.equal(ask('não')?.source, 'fallback')
+  assert.equal(ask('ok mas e o preço?')?.source, 'price')
+  // primeira mensagem e áudio sem texto (vazio) seguem o fluxo normal
+  assert.equal(ask('ok', true)?.source, 'welcome')
+  assert.equal(ask('')?.source, 'fallback')
 })
 
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {

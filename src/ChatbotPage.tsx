@@ -82,7 +82,7 @@ const topicTemplates = [
 ]
 
 const sourceLabel: Record<string, string> = {
-  schedule: 'Pedido de reunião ou horário: a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
+  schedule: 'Pedido de reunião ou horário: a equipe vê no lead', human: 'Pediu um atendente: o bot para e a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
 

@@ -15,7 +15,7 @@ import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, splitKeywords, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
 import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
@@ -1354,8 +1354,10 @@ const recordLeadRequest = async (companyId: string, conversationId: string, kind
 
 // Vale para qualquer conta, com o chatbot ligado ou não: se o cliente pediu reunião ou deu um horário, o lead mostra.
 const noteCustomerRequest = async (companyId: string, conversationId: string, text: string | null) => {
-  const meeting = text?.trim() ? detectMeetingRequest(text) : null
-  if (meeting && text) await recordLeadRequest(companyId, conversationId, 'meeting', text.trim().slice(0, 500), meeting.when)
+  if (!text?.trim()) return
+  const meeting = detectMeetingRequest(text)
+  if (meeting) await recordLeadRequest(companyId, conversationId, 'meeting', text.trim().slice(0, 500), meeting.when)
+  if (wantsHuman(text)) await recordLeadRequest(companyId, conversationId, 'handoff', text.trim().slice(0, 500), null)
 }
 
 const unheardAudioReply ='Recebi seu áudio, mas não consegui ouvi-lo agora 😕 Pode escrever sua dúvida em texto, por favor?'
@@ -1400,7 +1402,8 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
     [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
   )
   // "Vou chamar um especialista" só é verdade se alguém for avisado: o bot para nesta conversa e o lead mostra o pedido.
-  if (settings.handoff_on_fallback && normalChoice?.source === 'fallback' && !incoming.unheardAudio) {
+  // Quem pede um atendente pelo nome também passa para uma pessoa, com a opção ligada ou não.
+  if (normalChoice?.source === 'human' || (settings.handoff_on_fallback && normalChoice?.source === 'fallback' && !incoming.unheardAudio)) {
     await query(`UPDATE conversations SET bot_paused_until = ${BOT_PAUSE_AFTER_HUMAN}, updated_at = now() WHERE id = $1`, [incoming.conversationId])
     await recordLeadRequest(connection.company_id, incoming.conversationId, 'handoff', incoming.body?.trim().slice(0, 500) || null, null)
   }

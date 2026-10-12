@@ -15,7 +15,7 @@ export type BotSettings = {
   promotion_in_welcome?: boolean
 }
 export type BotRule = { id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }
-export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule'; ruleId?: string }
+export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule' | 'human'; ruleId?: string }
 
 export const defaultBusinessHours: BusinessHours = { enabled: false, days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }
 
@@ -50,9 +50,11 @@ const catalogWords = ['servico', 'servicos', 'produto', 'produtos', 'catalogo', 
 
 // Pedido de reunião, demonstração ou horário. Serve para avisar a equipe no lead e para o bot não cair no "não entendi".
 const meetingIntent = /\b(reuni(?:ao|oes)|agend\w*|marcar|remarcar|demonstra\w*|demo|apresenta(?:r|cao)|visita|videochamada|video chamada|call|me ligar|ligacao|me mostr\w+|mostrar (?:o|a|um|uma|seu|sua|os|as) \w+|conhecer (?:o|a) \w+)\b/
-const clockTime = /\b\d{1,2}\s?(?:h|hs|hr|hrs|horas?)\b|\b\d{1,2}:\d{2}\b/
+// Horas escritas de vários jeitos, inclusive como a transcrição de um áudio sai: "9h", "9h30", "9:00", "9 horas", "nove horas", "9 da manhã", "meio-dia".
+const clockTime = /\b\d{1,2}\s?(?:h|hs|hr|hrs|horas?)\b|\b\d{1,2}h\d{2}\b|\b\d{1,2}:\d{2}\b|\b\d{1,2}\s+(?:da|de)\s+(?:manha|tarde|noite)\b|\b(?:uma|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+(?:horas?|da manha|da tarde|da noite)\b|\bmeio[- ]?dia\b|\bmeia[- ]?noite\b/
 const dayWord = /\b(?:hoje|amanha|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|semana que vem|proxima semana)\b/
 const dayPart = /\b(?:manha|tarde|noite|almoco)\b/
+const dayAtHour = /\bas \d{1,2}\b/ // "amanhã às 9": o número solto só vale junto de um dia
 
 export type MeetingRequest = { kind: 'intent' | 'schedule'; when: string | null }
 
@@ -69,7 +71,7 @@ const foldWithMap = (text: string) => {
 
 // Trecho do dia e da hora que o cliente citou ("amanhã de manhã", "hoje às 16h"), do jeito que ele escreveu.
 const quotedWhen = (text: string, folded: string, origin: number[]) => {
-  const spans = [clockTime, dayWord, dayPart].map((pattern) => new RegExp(pattern.source).exec(folded)).filter((match): match is RegExpExecArray => Boolean(match))
+  const spans = [clockTime, dayWord, dayPart, dayAtHour].map((pattern) => new RegExp(pattern.source).exec(folded)).filter((match): match is RegExpExecArray => Boolean(match))
     .map((match) => ({ start: origin[match.index], end: origin[match.index + match[0].length - 1] + 1 })).sort((a, b) => a.start - b.start)
   if (!spans.length) return null
   const first = spans[0].start
@@ -81,10 +83,28 @@ const quotedWhen = (text: string, folded: string, origin: number[]) => {
 // Devolve null quando a mensagem não pede nada. "when" vem preenchido quando o cliente já disse dia/horário.
 export const detectMeetingRequest = (text: string): MeetingRequest | null => {
   const { folded, origin } = foldWithMap(text)
-  const schedule = clockTime.test(folded) || (dayWord.test(folded) && dayPart.test(folded))
+  const schedule = clockTime.test(folded) || (dayWord.test(folded) && (dayPart.test(folded) || dayAtHour.test(folded)))
   if (schedule) return { kind: 'schedule', when: quotedWhen(text, folded, origin) }
   return meetingIntent.test(folded) ? { kind: 'intent', when: null } : null
 }
+
+// "queria uma reunião amanhã às 9h": pede a reunião E dá o horário. Isso vale mais que um assunto de "horário de funcionamento".
+export const hasMeetingIntent = (text: string) => meetingIntent.test(foldText(text))
+
+// Pedido explícito por uma pessoa: "quero falar com um atendente", "me passa pra alguém", "chama o responsável".
+const humanRequest = /\b(?:falar|conversar|chamar|chama|passa|passar|transferir|transfere)\b.{0,30}\b(?:atendente|humano|pessoa|alguem|vendedor|consultor|responsavel|gerente|dono|especialista)\b|\b(?:atendente|humano)\b/
+export const wantsHuman = (text: string) => humanRequest.test(foldText(text))
+
+// "ok", "obrigado", "valeu", "👍": não pedem nada. Responder "não entendi" a isso incomoda; o bot fica quieto.
+const ackWords = new Set(['ok', 'okay', 'blz', 'beleza', 'certo', 'combinado', 'fechado', 'show', 'perfeito', 'otimo', 'entendi', 'entendido', 'sim', 'obrigado', 'obrigada', 'obg', 'valeu', 'vlw', 'tmj', 'top', 'joia', 'legal', 'massa', 'ta', 'bom', 'gracas', 'muito', 'de', 'nada', 'tudo', 'certeza', 'claro', 'uhum', 'aham'])
+export const isAcknowledgement = (foldedText: string) => {
+  if (!foldedText) return false
+  if (!/[a-z0-9]/.test(foldedText)) return true // só emoji ou pontuação
+  const tokens = foldedText.replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean)
+  return tokens.length > 0 && tokens.length <= 4 && tokens.every((token) => ackWords.has(token))
+}
+
+export const humanReply = 'Claro! 😊 Já avisei um atendente, que vai falar com você por aqui assim que possível.'
 
 export const scheduleReplies = {
   intent: 'Claro! 😊 Me diga o dia e o horário que ficam melhores para você, que um atendente confirma.',
@@ -113,6 +133,10 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
   if (settings.bot_mode === 'outside_hours' && hours.enabled && !outside) return null
 
   const folded = foldText(input.text)
+  const meeting = detectMeetingRequest(input.text)
+  // Pediu a reunião e já deu o horário ("queria uma reunião amanhã às 9h"): vale mais que um assunto de "horário de funcionamento".
+  if (meeting?.kind === 'schedule' && hasMeetingIntent(input.text)) return { text: scheduleReplies.schedule, source: 'schedule' }
+
   // Vence o assunto com a palavra mais específica (mais longa); se empatar, o que casou mais palavras; depois, a ordem da lista.
   let best: { rule: BotRule; longest: number; hits: number } | null = null
   for (const rule of rules) {
@@ -135,7 +159,7 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
     if (catalogWords.some((word) => containsKeyword(folded, word))) return { text: `O que oferecemos:\n${priceLines(named.slice(0, 20))}`, source: 'price' }
   }
 
-  const meeting = detectMeetingRequest(input.text)
+  if (wantsHuman(input.text)) return { text: humanReply, source: 'human' }
   if (meeting) return { text: scheduleReplies[meeting.kind], source: 'schedule' }
 
   const offHours = settings.off_hours_message?.trim()
@@ -146,6 +170,7 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
     const firstReply = [welcome, settings.promotion_in_welcome && promotion ? promotion : ''].filter(Boolean).join('\n\n')
     if (firstReply) return { text: firstReply, source: 'welcome' }
   }
+  if (isAcknowledgement(folded)) return null
   if (outside && offHours) return { text: offHours, source: 'off_hours' }
   const fallback = settings.fallback_message?.trim()
   return fallback ? { text: fallback, source: 'fallback' } : null
