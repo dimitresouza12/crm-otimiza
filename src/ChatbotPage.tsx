@@ -22,6 +22,25 @@ type Form = {
   locationMessage: string
 }
 
+// Padrão do horário de atendimento: manhã e tarde, com pausa para o almoço.
+const lunchBreakPeriods = [{ start: '08:00', end: '12:00' }, { start: '14:00', end: '18:00' }]
+const minutesOf = (value: string) => { const [hour, minute] = value.split(':').map(Number); return (hour || 0) * 60 + (minute || 0) }
+const timeOf = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+// Sugere o período seguinte sem sobrepor o último: 2 h depois (a pausa) e 4 h de duração; se sobrar pouco do dia, usa o que sobrou. Sem espaço: null.
+const nextPeriod = (last: { end: string }) => {
+  const lastEnd = minutesOf(last.end)
+  let start = lastEnd + 120
+  if (start > 22 * 60) start = lastEnd + 30
+  const end = Math.min(start + 240, 23 * 60 + 59)
+  return end - start >= 30 ? { start: timeOf(start), end: timeOf(end) } : null
+}
+const periodsFromHours = (hours: BotSettingsData['business_hours']) => {
+  const periods = hours.periods?.length ? hours.periods.map((period) => ({ start: period.start, end: period.end })) : [{ start: hours.start, end: hours.end }]
+  // Quem nunca configurou o horário ainda está no padrão antigo (09:00 às 18:00, sem pausa): mostra o padrão novo, com almoço.
+  const untouched = !hours.enabled && periods.length === 1 && periods[0].start === '09:00' && periods[0].end === '18:00'
+  return untouched ? lunchBreakPeriods.map((period) => ({ ...period })) : periods
+}
+
 // 5585999990001 -> (85) 99999-0001
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, '')
@@ -47,7 +66,7 @@ const toForm = (settings: BotSettingsData): Form => ({
   offHours: settings.off_hours_message ?? '',
   hoursEnabled: settings.business_hours.enabled,
   days: settings.business_hours.days,
-  periods: settings.business_hours.periods?.length ? settings.business_hours.periods.map((period) => ({ start: period.start, end: period.end })) : [{ start: settings.business_hours.start, end: settings.business_hours.end }],
+  periods: periodsFromHours(settings.business_hours),
   mode: settings.bot_mode,
   priceReplies: settings.price_replies_enabled,
   catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : Number(item.price).toFixed(2).replace('.', ','), description: item.description ?? '' })),
@@ -329,7 +348,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
                     {form.periods.length > 1 && <button className="bot-icon" type="button" aria-label={`Remover o período ${index + 1}`} onClick={() => update({ periods: form.periods.filter((_, position) => position !== index) })}><X size={16} /></button>}
                   </div>
                 ))}
-                {form.periods.length < 4 && <button className="bot-add" type="button" onClick={() => { const last = form.periods[form.periods.length - 1]; const [hour, minute] = last.end.split(':').map(Number); const start = `${String(Math.min(hour + 2, 22)).padStart(2, '0')}:${String(minute || 0).padStart(2, '0')}`; update({ periods: [...form.periods, { start, end: `${String(Math.min(Number(start.slice(0, 2)) + 4, 23)).padStart(2, '0')}:${start.slice(3)}` }] }) }}><Plus size={16} /> Adicionar outro período (ex.: depois do almoço)</button>}
+                {form.periods.length < 4 && <button className="bot-add" type="button" onClick={() => { const next = nextPeriod(form.periods[form.periods.length - 1]); if (next) update({ periods: [...form.periods, next] }); else setError('Não há espaço depois do último período. Termine ele mais cedo para adicionar outro.') }}><Plus size={16} /> Adicionar outro período</button>}
                 <p className="bot-periods__hint">{form.periods.length > 1 ? `Atendimento ${form.periods.map((period) => `das ${period.start} às ${period.end}`).join(' e ')}. O que fica entre os períodos conta como fechado.` : 'Tem pausa para o almoço? Adicione outro período: por exemplo, 07:00 às 11:00 e 13:00 às 17:00.'}</p>
               </div>
               <fieldset className="bot-modes"><legend>Quando o bot responde?</legend>

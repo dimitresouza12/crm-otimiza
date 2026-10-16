@@ -24,7 +24,8 @@ export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' |
 // Unidade que atende uma cidade: o cliente que citar a cidade (ou um apelido/bairro) recebe o link do WhatsApp dela.
 export type BotLocation = { id: string; city: string; aliases?: string[]; phone: string; label?: string }
 
-export const defaultBusinessHours: BusinessHours = { enabled: false, days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }
+// Padrão: segunda a sexta, manhã e tarde, com pausa para o almoço. Só vale quando a empresa liga o horário de atendimento.
+export const defaultBusinessHours: BusinessHours = { enabled: false, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00', periods: [{ start: '08:00', end: '12:00' }, { start: '14:00', end: '18:00' }] }
 
 const weekdays: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
 const toMinutes = (value: string) => {
