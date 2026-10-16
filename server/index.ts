@@ -15,7 +15,7 @@ import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
 import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
@@ -1045,12 +1045,12 @@ const chatbotScope = async (request: FastifyRequest, reply: FastifyReply) => {
   return scope
 }
 
-const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback'
+const botColumns = 'is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback, locations, ask_city, location_message'
 type BotSettingsRow = BotSettings & { ai_enabled: boolean; handoff_on_fallback: boolean }
 
 const emptyBotSettings: BotSettingsRow = {
   is_active: false, welcome_message: '', fallback_message: '', off_hours_message: '', business_hours: defaultBusinessHours,
-  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true, promotion_message: '', promotion_in_welcome: false, handoff_on_fallback: false,
+  bot_mode: 'always', catalog: [], price_replies_enabled: true, ai_enabled: true, promotion_message: '', promotion_in_welcome: false, handoff_on_fallback: false, locations: [], ask_city: false, location_message: '',
 }
 
 const loadBotSettings = async (companyId: string): Promise<BotSettingsRow> => {
@@ -1092,7 +1092,18 @@ const catalogSchema = z.array(z.object({
   price: z.coerce.number().min(0).max(10_000_000).nullable(),
   description: z.string().trim().max(400).optional(),
 })).max(60)
+// Unidade que atende uma cidade. O telefone é guardado só com dígitos e DDI (5585999990001), pronto para o link wa.me.
+const locationsSchema = z.array(z.object({
+  id: z.string().trim().min(1).max(60),
+  city: z.string().trim().min(2, 'Informe o nome de cada cidade.').max(80),
+  aliases: z.array(z.string().trim().min(2).max(60)).max(20).default([]),
+  phone: z.string().transform((value) => internationalPhone(value)).refine((value) => /^55\d{10,11}$/.test(value), { message: 'Confira o WhatsApp de cada unidade: use DDD e número, como (85) 99999-9999.' }),
+  label: z.string().trim().max(80).optional(),
+})).max(50, 'No máximo 50 cidades.').refine((items) => new Set(items.map((item) => item.id)).size === items.length, { message: 'Cidades repetidas na lista.' })
 const botSettingsFields = {
+  locations: locationsSchema.optional(),
+  askCity: z.boolean().optional(),
+  locationMessage: z.string().max(500).optional(),
   welcomeMessage: z.string().max(2000).optional(),
   fallbackMessage: z.string().max(2000).optional(),
   offHoursMessage: z.string().max(2000).optional(),
@@ -1113,14 +1124,15 @@ app.put('/api/chatbot/settings', { preHandler: authenticate }, async (request, r
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Configuração do chatbot inválida.' })
   const input = parsed.data
   const { rows } = await query(
-    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true), $11, COALESCE($12::boolean, false), COALESCE($13::boolean, false))
+    `INSERT INTO chatbot_settings (company_id, is_active, welcome_message, fallback_message, off_hours_message, business_hours, bot_mode, catalog, price_replies_enabled, ai_enabled, promotion_message, promotion_in_welcome, handoff_on_fallback, locations, ask_city, location_message)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{"enabled":false,"days":[1,2,3,4,5],"start":"09:00","end":"18:00"}'::jsonb), COALESCE($7::text, 'always'), COALESCE($8::jsonb, '[]'::jsonb), COALESCE($9::boolean, true), COALESCE($10::boolean, true), $11, COALESCE($12::boolean, false), COALESCE($13::boolean, false), COALESCE($14::jsonb, '[]'::jsonb), COALESCE($15::boolean, false), $16::text)
      ON CONFLICT (company_id) DO UPDATE SET is_active = EXCLUDED.is_active, welcome_message = EXCLUDED.welcome_message, fallback_message = EXCLUDED.fallback_message, off_hours_message = EXCLUDED.off_hours_message,
        business_hours = COALESCE($6::jsonb, chatbot_settings.business_hours), bot_mode = COALESCE($7::text, chatbot_settings.bot_mode), catalog = COALESCE($8::jsonb, chatbot_settings.catalog),
        price_replies_enabled = COALESCE($9::boolean, chatbot_settings.price_replies_enabled), ai_enabled = COALESCE($10::boolean, chatbot_settings.ai_enabled), promotion_message = EXCLUDED.promotion_message,
-       promotion_in_welcome = COALESCE($12::boolean, chatbot_settings.promotion_in_welcome), handoff_on_fallback = COALESCE($13::boolean, chatbot_settings.handoff_on_fallback), updated_at = now()
+       promotion_in_welcome = COALESCE($12::boolean, chatbot_settings.promotion_in_welcome), handoff_on_fallback = COALESCE($13::boolean, chatbot_settings.handoff_on_fallback),
+       locations = COALESCE($14::jsonb, chatbot_settings.locations), ask_city = COALESCE($15::boolean, chatbot_settings.ask_city), location_message = COALESCE($16::text, chatbot_settings.location_message), updated_at = now()
      RETURNING ${botColumns}`,
-    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null, clean(input.promotionMessage), input.promotionInWelcome ?? null, input.handoffOnFallback ?? null],
+    [scope.companyId, input.isActive, clean(input.welcomeMessage), clean(input.fallbackMessage), clean(input.offHoursMessage), input.businessHours ? JSON.stringify(input.businessHours) : null, input.botMode ?? null, input.catalog ? JSON.stringify(input.catalog) : null, input.priceRepliesEnabled ?? null, input.aiEnabled ?? null, clean(input.promotionMessage), input.promotionInWelcome ?? null, input.handoffOnFallback ?? null, input.locations ? JSON.stringify(input.locations) : null, input.askCity ?? null, input.locationMessage ?? null],
   )
   return rows[0]
 })
@@ -1176,7 +1188,7 @@ app.delete('/api/chatbot/rules/:ruleId', { preHandler: authenticate }, async (re
 app.post('/api/chatbot/test', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
   const scope = await chatbotScope(request, reply)
   if (!scope) return
-  const parsed = z.object({ message: z.string().max(1000), firstMessage: z.boolean().default(false), at: z.string().datetime().optional(), draft: z.object(botSettingsFields).optional() }).safeParse(request.body)
+  const parsed = z.object({ message: z.string().max(1000), firstMessage: z.boolean().default(false), at: z.string().datetime().optional(), asPhone: z.string().max(30).optional(), draft: z.object(botSettingsFields).optional() }).safeParse(request.body)
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Mensagem de teste inválida.' })
   const saved = await loadBotSettings(scope.companyId)
   const draft = parsed.data.draft ?? {}
@@ -1192,10 +1204,14 @@ app.post('/api/chatbot/test', { preHandler: authenticate, config: { rateLimit: {
     ...(draft.priceRepliesEnabled !== undefined ? { price_replies_enabled: draft.priceRepliesEnabled } : {}),
     ...(draft.promotionMessage !== undefined ? { promotion_message: clean(draft.promotionMessage) } : {}),
     ...(draft.promotionInWelcome !== undefined ? { promotion_in_welcome: draft.promotionInWelcome } : {}),
+    ...(draft.locations ? { locations: draft.locations } : {}),
+    ...(draft.askCity !== undefined ? { ask_city: draft.askCity } : {}),
+    ...(draft.locationMessage !== undefined ? { location_message: draft.locationMessage } : {}),
   }
   const rules = (await loadBotRules(scope.companyId)).filter((rule) => rule.is_active)
   const now = parsed.data.at ? new Date(parsed.data.at) : new Date()
-  const choice = chooseBotReply({ settings, rules, text: parsed.data.message, isFirstMessage: parsed.data.firstMessage, now })
+  // asPhone: testar "como se fosse" o número de uma das unidades (ele não manda o cliente para si mesmo).
+  const choice = chooseBotReply({ settings, rules, text: parsed.data.message, isFirstMessage: parsed.data.firstMessage, now, ownPhone: parsed.data.asPhone || null })
   const withinHours = isWithinBusinessHours(settings.business_hours, now)
   const silentReason = choice ? null : settings.bot_mode === 'outside_hours' && settings.business_hours.enabled && withinHours ? 'inside_hours' : 'nothing_matched'
   return { reply: choice?.text ?? null, source: choice?.source ?? 'silent', ruleName: rules.find((rule) => rule.id === choice?.ruleId)?.name ?? null, withinHours, silentReason }
@@ -1380,13 +1396,24 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
   if (!settings.is_active) return
   const paused = await query<{ paused: boolean }>(`SELECT (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS paused FROM conversations WHERE id = $1`, [incoming.conversationId])
   if (paused.rows[0]?.paused) return
-  const [{ rows: countRows }, rules] = await Promise.all([
+  const hasLocations = (settings.locations ?? []).length > 0
+  const [{ rows: countRows }, rules, ownChannel, sentLocations] = await Promise.all([
     query<{ total: string }>(`SELECT count(*)::text AS total FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`, [incoming.conversationId]),
     loadBotRules(connection.company_id).then((all) => all.filter((rule) => rule.is_active)),
+    hasLocations ? query<{ phone_number: string | null }>('SELECT phone_number FROM whatsapp_channels WHERE id = $1', [connection.channel_id]) : Promise.resolve({ rows: [] as Array<{ phone_number: string | null }> }),
+    // Unidades que o bot já indicou nesta conversa nas últimas 24 horas: não repete o mesmo link.
+    hasLocations ? query<{ location_id: string }>(
+      `SELECT DISTINCT loc AS location_id FROM messages m,
+         jsonb_array_elements_text(CASE WHEN jsonb_typeof(m.raw_payload -> 'locationIds') = 'array' THEN m.raw_payload -> 'locationIds' ELSE '[]'::jsonb END) AS loc
+       WHERE m.conversation_id = $1 AND m.sent_by = 'bot' AND m.sent_at > now() - interval '24 hours'`, [incoming.conversationId],
+    ) : Promise.resolve({ rows: [] as Array<{ location_id: string }> }),
   ])
-  const normalChoice = chooseBotReply({ settings, rules, text: incoming.body ?? '', isFirstMessage: Number(countRows[0]?.total ?? 0) === 1 })
+  const normalChoice = chooseBotReply({
+    settings, rules, text: incoming.body ?? '', isFirstMessage: Number(countRows[0]?.total ?? 0) === 1,
+    ownPhone: ownChannel.rows[0]?.phone_number ?? null, sentLocationIds: sentLocations.rows.map((row) => row.location_id),
+  })
   // Áudio que não pôde ser transcrito não é "frase sem sentido": pede o texto, em vez de mandar o "não entendi".
-  const choice: { text: string; ruleId?: string } | null = normalChoice && incoming.unheardAudio ? { text: unheardAudioReply } : normalChoice
+  const choice: { text: string; ruleId?: string; locationIds?: string[] } | null = normalChoice && incoming.unheardAudio ? { text: unheardAudioReply } : normalChoice
   if (!choice) return
   const responseText = choice.text
   const rule = choice.ruleId ? { id: choice.ruleId } : undefined
@@ -1407,7 +1434,7 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
     `INSERT INTO messages (company_id, conversation_id, external_id, direction, message_type, body, sent_at, raw_payload, sent_by)
      VALUES ($1, $2, $3, 'outbound', 'text', $4, now(), $5::jsonb, 'bot')
      ON CONFLICT (conversation_id, external_id) DO UPDATE SET sent_by = 'bot', raw_payload = EXCLUDED.raw_payload`,
-    [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null })],
+    [connection.company_id, incoming.conversationId, sentExternalId ?? `chatbot:${randomUUID()}`, responseText, JSON.stringify({ source: 'chatbot', ruleId: rule?.id ?? null, ...(choice.locationIds?.length ? { locationIds: choice.locationIds } : {}) })],
   )
   // "Vou chamar um especialista" só é verdade se alguém for avisado: o bot para nesta conversa e o lead mostra o pedido.
   // Quem pede um atendente pelo nome também passa para uma pessoa, com a opção ligada ou não.
@@ -1536,6 +1563,14 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
   if (!connection || typeof sentSecret !== 'string' || !safeEqual(sentSecret, connection.webhook_secret)) return reply.code(401).send({ error: 'Webhook não autorizado.' })
   const payload = record(request.body)
   if (payload.instance !== connection.external_account_id) return reply.code(403).send({ error: 'Instância inválida.' })
+  // A Evolution informa o número do dono da instância em "sender". O CRM aprende o telefone do canal uma vez, sem pedir ao usuário;
+  // o bot usa isso para não mandar o cliente para o próprio número. Ignora se for o mesmo número do contato da mensagem.
+  const ownerDigits = /^(\d{8,15})@s\.whatsapp\.net$/.exec(String(payload.sender ?? ''))?.[1]
+  const remoteDigits = String(record(record(payload.data).key).remoteJid ?? '').split('@')[0].replace(/\D/g, '')
+  if (ownerDigits && ownerDigits !== remoteDigits) {
+    await query(`UPDATE whatsapp_channels SET phone_number = $2, updated_at = now() WHERE id = $1 AND COALESCE(btrim(phone_number), '') = ''`, [connection.channel_id, ownerDigits])
+      .catch((error) => app.log.warn({ err: error, connectionId: connection.id }, 'Não foi possível guardar o número do canal'))
+  }
   const event = String(payload.event ?? '').toLowerCase().replace(/[^a-z]/g, '')
   const data = record(payload.data)
   const messageId = String(record(data.key).id ?? data.id ?? '')

@@ -15,9 +15,14 @@ export type BotSettings = {
   price_replies_enabled: boolean
   promotion_message?: string | null
   promotion_in_welcome?: boolean
+  locations?: BotLocation[]
+  ask_city?: boolean
+  location_message?: string | null
 }
 export type BotRule = { id: string; trigger_type: 'keyword' | 'first_message'; trigger_value: string | null; response_text: string }
-export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule' | 'human'; ruleId?: string }
+export type BotReply = { text: string; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule' | 'human' | 'location'; ruleId?: string; locationIds?: string[] }
+// Unidade que atende uma cidade: o cliente que citar a cidade (ou um apelido/bairro) recebe o link do WhatsApp dela.
+export type BotLocation = { id: string; city: string; aliases?: string[]; phone: string; label?: string }
 
 export const defaultBusinessHours: BusinessHours = { enabled: false, days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00' }
 
@@ -123,20 +128,70 @@ export const isGreeting = (foldedText: string) => {
   return tokens.length > 0 && tokens.length <= 5 && tokens.every((token) => greetingWords.has(token)) && tokens.some((token) => greetingStarters.has(token))
 }
 
-export const formatMoney = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ')
+// ---- Atendimento por cidade ----
+// Telefone brasileiro em forma comparável: sem 55 e sem o 9 extra do celular (DDD + 8 dígitos), para (85) 99999-9999 = 5585999999999 = 85 9999-9999.
+const phoneKey = (value: string) => {
+  let digits = value.replace(/\D/g, '')
+  if (digits.startsWith('55') && digits.length >= 12) digits = digits.slice(2)
+  if (digits.length === 11 && digits[2] === '9') digits = digits.slice(0, 2) + digits.slice(3)
+  return digits
+}
+export const samePhone = (a: string, b: string) => { const first = phoneKey(a); return first.length >= 8 && first === phoneKey(b) }
+
+// Número com DDI para o wa.me; aceita com ou sem 55.
+export const internationalPhone = (value: string) => {
+  const digits = value.replace(/\D/g, '')
+  return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits
+}
+export const whatsappLink = (phone: string, text: string) => `https://wa.me/${internationalPhone(phone)}?text=${encodeURIComponent(text)}`
+
+export const defaultLocationMessage = 'Para atender você em {cidade}, é só chamar a nossa equipe local por este link: {link}'
+export const cityQuestion = 'Em qual cidade você está? 📍'
+
+// Cidades (ou apelidos/bairros) citadas na mensagem, na ordem em que aparecem. Palavra inteira, sem acento nem maiúsculas.
+export const matchLocations = (foldedText: string, locations: BotLocation[]) => {
+  const hits: Array<{ location: BotLocation; at: number }> = []
+  for (const location of locations) {
+    let first = -1
+    for (const name of [location.city, ...(location.aliases ?? [])].map(foldText).filter((value) => value.length >= 2)) {
+      const found = new RegExp(`(^|[^a-z0-9])${escapeRegex(name)}(?![a-z0-9])`).exec(foldedText)
+      if (found && (first === -1 || found.index < first)) first = found.index
+    }
+    if (first !== -1) hits.push({ location, at: first })
+  }
+  return hits.sort((a, b) => a.at - b.at).map((hit) => hit.location)
+}
+
+export const locationText = (locations: BotLocation[], template: string | null | undefined) => locations.map((location) => {
+  const message = template?.trim() || defaultLocationMessage
+  const link = whatsappLink(location.phone, `Olá! Vim pelo atendimento de ${location.city}.`)
+  const text = message.replace(/\{cidade\}/g, location.city).replace(/\{unidade\}/g, location.label?.trim() || location.city).replace(/\{link\}/g, link)
+  return message.includes('{link}') ? text : `${text}\n${link}`
+}).join('\n\n')
+
+export const formatMoney =(value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/ /g, ' ')
 
 const hasPrice = (item: CatalogItem) => item.price !== null && Number(item.price) >= 0
 
 // Item sem preço também é respondido: sai o nome e o detalhe, sem valor.
 const priceLines = (items: CatalogItem[]) => items.map((item) => `• ${item.name}${hasPrice(item) ? `: ${formatMoney(Number(item.price))}` : ''}${item.description?.trim() ? ` — ${item.description.trim()}` : ''}`).join('\n')
 
-export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[]; text: string; isFirstMessage: boolean; now?: Date }): BotReply | null => {
+// ownPhone: o número que está atendendo (não manda o cliente para si mesmo). sentLocationIds: unidades já indicadas há pouco nesta conversa.
+export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[]; text: string; isFirstMessage: boolean; now?: Date; ownPhone?: string | null; sentLocationIds?: string[] }): BotReply | null => {
   const { settings, rules } = input
   const hours = settings.business_hours
   const outside = hours.enabled && !isWithinBusinessHours(hours, input.now ?? new Date())
   if (settings.bot_mode === 'outside_hours' && hours.enabled && !outside) return null
 
   const folded = foldText(input.text)
+
+  // Citou uma cidade atendida por outra unidade: manda o link dela, antes de assuntos e preços (o preço pode mudar por unidade).
+  const locations = settings.locations ?? []
+  const mentioned = locations.length ? matchLocations(folded, locations) : []
+  const alreadySent = input.sentLocationIds ?? []
+  const redirect = mentioned.filter((location) => !(input.ownPhone && samePhone(location.phone, input.ownPhone)) && !alreadySent.includes(location.id)).slice(0, 3)
+  if (redirect.length) return { text: locationText(redirect, settings.location_message), source: 'location', locationIds: redirect.map((location) => location.id) }
+
   const meeting = detectMeetingRequest(input.text)
   // Pediu a reunião e já deu o horário ("queria uma reunião amanhã às 9h"): vale mais que um assunto de "horário de funcionamento".
   if (meeting?.kind === 'schedule' && hasMeetingIntent(input.text)) return { text: scheduleReplies.schedule, source: 'schedule' }
@@ -171,7 +226,9 @@ export const chooseBotReply = (input: { settings: BotSettings; rules: BotRule[];
   const promotion = settings.promotion_message?.trim()
   if (input.isFirstMessage || isGreeting(folded)) {
     if (outside && offHours) return { text: offHours, source: 'off_hours' }
-    const firstReply = [welcome, settings.promotion_in_welcome && promotion ? promotion : ''].filter(Boolean).join('\n\n')
+    // Pergunta a cidade só na 1ª mensagem e só se o cliente ainda não a citou.
+    const askCity = Boolean(settings.ask_city) && input.isFirstMessage && locations.length > 0 && mentioned.length === 0
+    const firstReply = [welcome, settings.promotion_in_welcome && promotion ? promotion : '', askCity ? cityQuestion : ''].filter(Boolean).join('\n\n')
     if (firstReply) return { text: firstReply, source: 'welcome' }
   }
   if (isAcknowledgement(folded)) return null

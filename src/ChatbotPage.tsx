@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Bot, CheckCircle2, Clock, Plus, Send, Sparkles, Tag, Trash2, X } from 'lucide-react'
+import { ArrowRight, Bot, CheckCircle2, Clock, MapPin, Plus, Send, Sparkles, Tag, Trash2, X } from 'lucide-react'
 import { api, type BotRuleData, type BotSettingsData, type BotSettingsInput, type Session } from './lib/api'
 
 type Form = {
@@ -17,7 +17,22 @@ type Form = {
   mode: 'always' | 'outside_hours'
   priceReplies: boolean
   catalog: Array<{ name: string; price: string; description: string }>
+  locations: Array<{ id: string; city: string; aliases: string; phone: string; label: string }>
+  askCity: boolean
+  locationMessage: string
 }
+
+// 5585999990001 -> (85) 99999-0001
+const formatPhone = (value: string) => {
+  const digits = value.replace(/\D/g, '')
+  const local = digits.startsWith('55') && digits.length >= 12 ? digits.slice(2) : digits
+  if (local.length === 11) return `(${local.slice(0, 2)}) ${local.slice(2, 7)}-${local.slice(7)}`
+  if (local.length === 10) return `(${local.slice(0, 2)}) ${local.slice(2, 6)}-${local.slice(6)}`
+  return value
+}
+const validPhone = (value: string) => { const digits = value.replace(/\D/g, ''); return /^(55)?\d{10,11}$/.test(digits) && (digits.length <= 11 || digits.startsWith('55')) }
+const newLocationId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `loc-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+const defaultLocationMessage = 'Para atender você em {cidade}, é só chamar a nossa equipe local por este link: {link}'
 
 const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
@@ -36,6 +51,9 @@ const toForm = (settings: BotSettingsData): Form => ({
   mode: settings.bot_mode,
   priceReplies: settings.price_replies_enabled,
   catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : Number(item.price).toFixed(2).replace('.', ','), description: item.description ?? '' })),
+  locations: (settings.locations ?? []).map((item) => ({ id: item.id, city: item.city, aliases: (item.aliases ?? []).join(', '), phone: formatPhone(item.phone), label: item.label ?? '' })),
+  askCity: settings.ask_city ?? false,
+  locationMessage: settings.location_message ?? '',
 })
 
 const parsePrice = (value: string) => {
@@ -60,10 +78,18 @@ const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabl
     if (Number.isNaN(price)) throw new Error(`O valor de "${item.name.trim()}" não parece um número (exemplo: 40 ou 39,90). Deixe em branco se não tiver preço fixo.`)
     return { name: item.name.trim(), price, description: item.description.trim() || undefined }
   })
+  const locations = form.locations.filter((item) => item.city.trim() || item.phone.trim() || item.aliases.trim()).map((item) => {
+    if (item.city.trim().length < 2) throw new Error('Dê um nome para cada cidade do atendimento por cidade.')
+    if (!validPhone(item.phone)) throw new Error(`Confira o WhatsApp de "${item.city.trim()}": use DDD e número, como (85) 99999-9999.`)
+    return {
+      id: item.id, city: item.city.trim(), phone: item.phone.replace(/\D/g, ''), label: item.label.trim() || undefined,
+      aliases: [...new Set(item.aliases.split(/[,;\n]/).map((alias) => alias.trim()).filter((alias) => alias.length >= 2))].slice(0, 20),
+    }
+  })
   return {
     welcomeMessage: form.welcome, promotionMessage: form.promotion, promotionInWelcome: form.promotionInWelcome, fallbackMessage: form.fallback, offHoursMessage: form.offHours,
     businessHours: { enabled: form.hoursEnabled, days: form.days, start: form.periods[0].start, end: form.periods[form.periods.length - 1].end, periods: form.periods },
-    botMode: form.mode, priceRepliesEnabled: form.priceReplies, catalog,
+    botMode: form.mode, priceRepliesEnabled: form.priceReplies, catalog, locations, askCity: form.askCity, locationMessage: form.locationMessage,
   }
 }
 
@@ -86,7 +112,7 @@ const topicTemplates = [
 ]
 
 const sourceLabel: Record<string, string> = {
-  schedule: 'Pedido de reunião ou horário: a equipe vê no lead', human: 'Pediu um atendente: o bot para e a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
+  location: 'Encaminhou para a unidade da cidade citada', schedule: 'Pedido de reunião ou horário: a equipe vê no lead', human: 'Pediu um atendente: o bot para e a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
 
@@ -149,6 +175,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
   const [testText, setTestText] = useState('')
   const [testFirst, setTestFirst] = useState(true)
   const [testOutside, setTestOutside] = useState(false)
+  const [testAs, setTestAs] = useState('')
   const [testing, setTesting] = useState(false)
   const [conversation, setConversation] = useState<Array<{ from: 'client' | 'bot'; text: string; note?: string }>>([])
   const [uazapi, setUazapi] = useState({ channelName: 'Comercial', phone: '', serverUrl: '', instance: '', token: '' })
@@ -227,7 +254,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     if (!message || testing) return
     setTesting(true); setError('')
     try {
-      const reply = await api.chatbotTest(session, { message, firstMessage: testFirst, at: testOutside ? outsideHoursInstant(form) : undefined, draft: draftFromForm(form) })
+      const reply = await api.chatbotTest(session, { message, firstMessage: testFirst, at: testOutside ? outsideHoursInstant(form) : undefined, asPhone: testAs || undefined, draft: draftFromForm(form) })
       const note = reply.reply === null ? silentLabel[reply.silentReason ?? 'nothing_matched'] : sourceLabel[reply.source] + (reply.ruleName ? `: ${reply.ruleName}` : '')
       setConversation((current) => [...current, { from: 'client', text: message }, { from: 'bot', text: reply.reply ?? 'O bot ficaria em silêncio.', note }])
       setTestText(''); setTestFirst(false)
@@ -317,7 +344,37 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus produtos e preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar por um item, pelos seus serviços ou “quanto custa?”, o bot responde com o nome, o valor e o detalhe. Sem preço fixo? Deixe o valor em branco.</p></div></div>
+          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><MapPin size={16} /> Atendimento por cidade</h2><p>Atende em mais de um número? Cadastre as cidades e o bot manda o link do WhatsApp da unidade certa quando o cliente disser onde está. Quem não tem mais de um número pode pular esta etapa.</p></div></div>
+          <div className="bot-locations">
+            {form.locations.map((item, index) => {
+              const patch = (fields: Partial<typeof item>) => update({ locations: form.locations.map((row, position) => position === index ? { ...row, ...fields } : row) })
+              return (
+                <div className="bot-location" key={item.id}>
+                  <div className="bot-location__main">
+                    <label>Cidade<input aria-label="Cidade" value={item.city} onChange={(event) => patch({ city: event.target.value })} placeholder="Caucaia" maxLength={80} /></label>
+                    <label>WhatsApp da unidade<input aria-label="WhatsApp da unidade" inputMode="tel" value={item.phone} onChange={(event) => patch({ phone: event.target.value })} placeholder="(85) 99999-9999" maxLength={20} /></label>
+                    <button className="bot-icon" type="button" aria-label={`Remover ${item.city || 'cidade'}`} onClick={() => update({ locations: form.locations.filter((_, position) => position !== index) })}><X size={16} /></button>
+                  </div>
+                  <label>Também reconhecer <small>bairros e apelidos, separados por vírgula</small><input aria-label="Também reconhecer" value={item.aliases} onChange={(event) => patch({ aliases: event.target.value })} placeholder="Jurema, Cidade Nova" /></label>
+                  <label>Nome da unidade <small>opcional, aparece no lugar de {'{unidade}'}</small><input aria-label="Nome da unidade" value={item.label} onChange={(event) => patch({ label: event.target.value })} placeholder="Unidade Caucaia" maxLength={80} /></label>
+                </div>
+              )
+            })}
+            <button className="bot-add" type="button" onClick={() => update({ locations: [...form.locations, { id: newLocationId(), city: '', aliases: '', phone: '', label: '' }] })}><Plus size={16} /> Adicionar cidade</button>
+          </div>
+          {!!form.locations.length && (
+            <>
+              <label>Mensagem do encaminhamento <small>use {'{cidade}'}, {'{unidade}'} e {'{link}'}; em branco usa a mensagem padrão</small>
+                <textarea rows={3} value={form.locationMessage} onChange={(event) => update({ locationMessage: event.target.value })} placeholder={defaultLocationMessage} />
+              </label>
+              <Toggle checked={form.askCity} onChange={(value) => update({ askCity: value })} label="Perguntar a cidade quando o cliente ainda não disse" hint="Na primeira resposta, o bot acrescenta “Em qual cidade você está?”. Se o cliente já citou a cidade, ele vai direto ao link." />
+              <p className="bot-locations__hint">{channels.some((channel) => channel.phone_number) ? `Números que o CRM já conhece: ${channels.filter((channel) => channel.phone_number).map((channel) => formatPhone(channel.phone_number!)).join(', ')}. O bot não manda o cliente para o próprio número.` : 'O CRM aprende o número de cada WhatsApp conectado quando chega a primeira mensagem nele. Assim, o bot não manda o cliente para o próprio número.'}</p>
+            </>
+          )}
+        </section>
+
+        <section className="panel bot-card">
+          <div className="bot-card__head"><span className="bot-step">6</span><div><h2><Tag size={16} /> Seus produtos e preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar por um item, pelos seus serviços ou “quanto custa?”, o bot responde com o nome, o valor e o detalhe. Sem preço fixo? Deixe o valor em branco.</p></div></div>
           <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder sobre produtos e preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
           <div className="bot-catalog">
             {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$) <small>opcional</small></span><span>Detalhe <small>opcional</small></span><span /></div>}
@@ -334,7 +391,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">6</span><div><h2>Respostas por assunto</h2><p>Para cada assunto, diga que palavras o cliente costuma usar e o que o bot deve responder.</p></div><span className="count-pill">{commonRules.length}</span></div>
+          <div className="bot-card__head"><span className="bot-step">7</span><div><h2>Respostas por assunto</h2><p>Para cada assunto, diga que palavras o cliente costuma usar e o que o bot deve responder.</p></div><span className="count-pill">{commonRules.length}</span></div>
           <div className="bot-topics">
             {commonRules.map((rule) => <TopicCard key={`${rule.id}-${rule.name}-${rule.trigger_value}-${rule.response_text}`} rule={rule}
               onSave={(id, fields) => runRule(() => api.updateChatbotRule(session, id, fields), 'Assunto salvo.')}
@@ -355,7 +412,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">7</span><div><h2>Teste o seu bot</h2><p>Escreva como se fosse um cliente e veja a resposta, sem enviar nada de verdade. Vale também para o que você ainda não salvou.</p></div></div>
+          <div className="bot-card__head"><span className="bot-step">8</span><div><h2>Teste o seu bot</h2><p>Escreva como se fosse um cliente e veja a resposta, sem enviar nada de verdade. Vale também para o que você ainda não salvou.</p></div></div>
           <div className="bot-sim">
             <div className="bot-sim__chat" aria-live="polite">
               {!conversation.length && <p className="chatbot-empty">Experimente: “oi”, “quanto custa?”, “onde fica?”…</p>}
@@ -363,6 +420,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
             </div>
             <div className="bot-sim__options">
               <label><input type="checkbox" checked={testFirst} onChange={(event) => setTestFirst(event.target.checked)} /> É a primeira mensagem do cliente</label>
+              {form.locations.some((item) => item.city.trim() && validPhone(item.phone)) && <label>Responder como o número de <select aria-label="Responder como o número de" value={testAs} onChange={(event) => setTestAs(event.target.value)}><option value="">nenhuma unidade</option>{form.locations.filter((item) => item.city.trim() && validPhone(item.phone)).map((item) => <option key={item.id} value={item.phone.replace(/\D/g, '')}>{item.city.trim()}</option>)}</select></label>}
               {canSimulateOutside && <label><input type="checkbox" checked={testOutside} onChange={(event) => setTestOutside(event.target.checked)} /> Simular fora do horário de atendimento</label>}
               {!!conversation.length && <button className="bot-link" type="button" onClick={() => { setConversation([]); setTestFirst(true) }}>Limpar teste</button>}
             </div>

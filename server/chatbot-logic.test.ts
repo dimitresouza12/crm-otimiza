@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, isWithinBusinessHours, periodsOf, scheduleReplies, splitKeywords, wantsHuman, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, internationalPhone, isWithinBusinessHours, periodsOf, samePhone, scheduleReplies, splitKeywords, wantsHuman, whatsappLink, type BotLocation, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -154,6 +154,82 @@ test('"ok", "obrigado" e emoji não recebem o "não entendi"', () => {
   // primeira mensagem e áudio sem texto (vazio) seguem o fluxo normal
   assert.equal(ask('ok', true)?.source, 'welcome')
   assert.equal(ask('')?.source, 'fallback')
+})
+
+const units: BotLocation[] = [
+  { id: 'u-for', city: 'Fortaleza', aliases: ['Aldeota', 'Messejana'], phone: '(85) 99999-0001', label: 'Fortaleza Centro' },
+  { id: 'u-cau', city: 'Caucaia', aliases: ['Jurema'], phone: '85999990002' },
+  { id: 'u-jua', city: 'Juazeiro do Norte', phone: '+55 88 99999-0003' },
+]
+const withUnits: BotSettings = { ...settings, locations: units }
+
+test('telefones brasileiros são comparados sem DDI e sem o 9 extra', () => {
+  assert.equal(samePhone('(85) 99999-0001', '5585999990001'), true)
+  assert.equal(samePhone('+55 85 99999-0001', '85 9999-0001'), true)
+  assert.equal(samePhone('85999990001', '85999990002'), false)
+  assert.equal(samePhone('123', '123'), false)
+  assert.equal(internationalPhone('(85) 99999-0001'), '5585999990001')
+  assert.equal(internationalPhone('5585999990001'), '5585999990001')
+  assert.equal(whatsappLink('85999990002', 'Olá! Vim de Caucaia.'), 'https://wa.me/5585999990002?text=Ol%C3%A1!%20Vim%20de%20Caucaia.')
+})
+
+test('cidade citada recebe o link da unidade, sem acento e sem diferença de maiúsculas', () => {
+  const ask = (text: string, extra: Partial<Parameters<typeof chooseBotReply>[0]> = {}) => chooseBotReply({ settings: withUnits, rules, text, isFirstMessage: false, now: open, ...extra })
+  let reply = ask('sou de Caucaia')
+  assert.equal(reply?.source, 'location')
+  assert.deepEqual(reply?.locationIds, ['u-cau'])
+  assert.match(reply?.text ?? '', /Caucaia.*https:\/\/wa\.me\/5585999990002\?text=/)
+  assert.equal(ask('MORO NA JUREMA')?.locationIds?.[0], 'u-cau')
+  assert.equal(ask('tem unidade em juazeiro do norte?')?.locationIds?.[0], 'u-jua')
+  assert.equal(ask('Moro na Aldeota')?.locationIds?.[0], 'u-for')
+  // palavra inteira: "caucaiana" não é Caucaia
+  assert.notEqual(ask('a caucaiana chegou')?.source, 'location')
+  // prioridade sobre assunto e preço: o valor pode mudar por unidade
+  assert.equal(ask('quanto custa em Caucaia?')?.source, 'location')
+  assert.equal(ask('onde fica? sou de Caucaia')?.source, 'location')
+  // duas cidades: as duas unidades, na ordem em que aparecem
+  reply = ask('estou entre Caucaia e Fortaleza')
+  assert.deepEqual(reply?.locationIds, ['u-cau', 'u-for'])
+  assert.equal((reply?.text.match(/https:\/\/wa\.me\//g) ?? []).length, 2)
+  // sem lista de unidades nada muda
+  assert.notEqual(chooseBotReply({ settings, rules, text: 'sou de Caucaia', isFirstMessage: false, now: open })?.source, 'location')
+})
+
+test('o número que atende não manda o cliente para si mesmo, nem repete a mesma unidade', () => {
+  const ask = (text: string, extra: Partial<Parameters<typeof chooseBotReply>[0]> = {}) => chooseBotReply({ settings: withUnits, rules, text, isFirstMessage: false, now: open, ...extra })
+  // este número é o de Caucaia (escrito de outro jeito): segue o fluxo normal
+  assert.notEqual(ask('sou de Caucaia', { ownPhone: '+55 (85) 9999-90002' })?.source, 'location')
+  // Fortaleza continua sendo outra unidade
+  assert.deepEqual(ask('sou de Caucaia ou Fortaleza', { ownPhone: '5585999990002' })?.locationIds, ['u-for'])
+  // já indicada há pouco: não repete
+  assert.notEqual(ask('sou de Caucaia', { sentLocationIds: ['u-cau'] })?.source, 'location')
+  assert.deepEqual(ask('Caucaia e Fortaleza', { sentLocationIds: ['u-cau'] })?.locationIds, ['u-for'])
+})
+
+test('a mensagem do encaminhamento pode ser personalizada', () => {
+  const custom = chooseBotReply({ settings: { ...withUnits, location_message: 'Atendemos {cidade} pela {unidade}! Chame aqui: {link}' }, rules, text: 'Fortaleza', isFirstMessage: false, now: open })
+  assert.match(custom?.text ?? '', /^Atendemos Fortaleza pela Fortaleza Centro! Chame aqui: https:\/\/wa\.me\/5585999990001/)
+  const noLink = chooseBotReply({ settings: { ...withUnits, location_message: 'Fale com a gente em {cidade}.' }, rules, text: 'Caucaia', isFirstMessage: false, now: open })
+  assert.match(noLink?.text ?? '', /^Fale com a gente em Caucaia\.\nhttps:\/\/wa\.me\/5585999990002/)
+})
+
+test('pergunta a cidade só na primeira mensagem e só se o cliente ainda não a disse', () => {
+  const ask = (text: string, extra: { first?: boolean; ownPhone?: string; ask?: boolean; units?: BotLocation[] } = {}) => chooseBotReply({
+    settings: { ...withUnits, ask_city: extra.ask ?? true, locations: extra.units ?? units }, rules, text, isFirstMessage: extra.first ?? true, now: open, ownPhone: extra.ownPhone,
+  })
+  const asked = ask('oi')
+  assert.equal(asked?.source, 'welcome')
+  assert.match(asked?.text ?? '', /Bem-vindo à Barbearia X.*\n\nEm qual cidade você está\? 📍$/s)
+  // já disse a cidade: vai direto ao link, sem perguntar
+  assert.equal(ask('oi, sou de Caucaia')?.source, 'location')
+  // disse a cidade deste mesmo número: não encaminha nem pergunta
+  const own = ask('oi, sou de Caucaia', { ownPhone: '5585999990002' })
+  assert.equal(own?.source, 'welcome')
+  assert.doesNotMatch(own?.text ?? '', /Em qual cidade/)
+  // opção desligada, sem unidades ou cumprimento no meio da conversa: não pergunta
+  assert.doesNotMatch(ask('oi', { ask: false })?.text ?? '', /Em qual cidade/)
+  assert.doesNotMatch(ask('oi', { units: [] })?.text ?? '', /Em qual cidade/)
+  assert.doesNotMatch(ask('boa tarde', { first: false })?.text ?? '', /Em qual cidade/)
 })
 
 test('primeira mensagem recebe as boas-vindas; depois cai na resposta padrão', () => {
