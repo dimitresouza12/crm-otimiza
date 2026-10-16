@@ -43,6 +43,7 @@ import otimizaSymbol from './assets/otimiza-ai-symbol.svg'
 import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
+import { BillingCheckout } from './BillingCheckout'
 import { connectEvents, onChatEvent } from './lib/events'
 
 type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
@@ -962,9 +963,16 @@ function Onboarding({ account, onClose, onNavigate }: { account: { uses_automati
   return <Modal onClose={onClose}><section className="onboarding"><span className="onboarding__mark"><CheckCircle2 size={24}/></span><span className="eyebrow">CONTA CRIADA</span><h2>Bem-vindo, {account.company_name}.</h2><p>{automation ? 'Identificamos que sua empresa usa a automação Otimiza AI. Solicite a conexão para alinharmos sua instância e seus fluxos.' : 'Seu espaço está pronto. O próximo passo é conectar seu WhatsApp para começar a registrar conversas e leads.'}</p><button className="primary-button" type="button" onClick={() => { onNavigate('configuracoes'); onClose() }}>{automation ? 'Solicitar conexão da equipe' : 'Conectar WhatsApp'} <ArrowRight size={16}/></button><button className="modal__switch" type="button" onClick={onClose}>Explorar o CRM primeiro</button></section></Modal>
 }
 
-function TrialExpired({ onSignOut, account, salesWhatsapp }: { onSignOut: () => void; account: { plan: string; channel_limit: number; plan_price_cents: number }; salesWhatsapp: string }) {
+function TrialExpired({ session, onSignOut, account, salesWhatsapp, asaasEnabled, onActivated }: { session: Session; onSignOut: () => void; account: { name: string; email: string; plan: string; channel_limit: number; plan_price_cents: number }; salesWhatsapp: string; asaasEnabled: boolean; onActivated: () => void }) {
   const whatsapp = salesHref(salesWhatsapp, `Olá! Meu teste do ${planTitle(account.plan)} terminou. Quero ativar ${account.channel_limit} número${account.channel_limit === 1 ? '' : 's'} no CRM.`)
-  return <main className="trial-page"><section className="trial-card"><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Sua escolha registrada foi <b>{planTitle(account.plan)}</b> com <b>{account.channel_limit} número{account.channel_limit === 1 ? '' : 's'}</b>{account.plan_price_cents > 0 ? ` por ${formatCents(account.plan_price_cents)}/mês` : ''}.</p>{whatsapp ? <a className="primary-button trial-card__contact" href={whatsapp} target="_blank" rel="noreferrer">Falar com a Otimiza AI <ArrowRight size={16}/></a> : <p className="trial-card__contact-note">Entre em contato com a equipe Otimiza AI para ativar seu plano. O botão de WhatsApp comercial ainda precisa ser configurado pela equipe.</p>}<button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button></section></main>
+  const showCheckout = asaasEnabled && account.plan_price_cents > 0
+  return <main className="trial-page"><section className={`trial-card${showCheckout ? ' trial-card--billing' : ''}`}><span className="onboarding__mark"><LockKeyhole size={24}/></span><span className="eyebrow">PERÍODO DE TESTE ENCERRADO</span><h1>Seu CRM continua seguro.</h1><p>Os dados da sua empresa foram preservados. Sua escolha registrada foi <b>{planTitle(account.plan)}</b> com <b>{account.channel_limit} número{account.channel_limit === 1 ? '' : 's'}</b>{account.plan_price_cents > 0 ? ` por ${formatCents(account.plan_price_cents)}/mês` : ''}.</p>
+    {showCheckout && <BillingCheckout session={session} account={account} onActivated={onActivated}/>}
+    {whatsapp
+      ? <a className={showCheckout ? 'landing-outline-button trial-card__whatsapp' : 'primary-button trial-card__contact'} href={whatsapp} target="_blank" rel="noreferrer"><WhatsAppIcon size={15}/> Prefiro falar com a Otimiza AI</a>
+      : !showCheckout && <p className="trial-card__contact-note">Entre em contato com a equipe Otimiza AI para ativar seu plano. O botão de WhatsApp comercial ainda precisa ser configurado pela equipe.</p>}
+    <button className="modal__switch" type="button" onClick={onSignOut}>Sair da conta</button>
+  </section></main>
 }
 
 type AiInfo = Awaited<ReturnType<typeof api.opportunityAi>>
@@ -1045,6 +1053,7 @@ const initialsFor = (name: string) => name.split(/\s+/).filter(Boolean).slice(0,
 export default function App() {
   const [route, setRoute] = useState<PublicRoute>(() => routeFromPath(window.location.pathname))
   const [salesWhatsapp, setSalesWhatsapp] = useState('')
+  const [asaasEnabled, setAsaasEnabled] = useState(false)
   const [page, setPage] = useState<Page>('dashboard')
   const [channel, setChannel] = useState<Channel>('Todos os canais')
   const [leads, setLeads] = useState(initialLeads)
@@ -1054,7 +1063,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
-  const [account, setAccount] = useState<{ name: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
+  const [account, setAccount] = useState<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
   const [sales, setSales] = useState<SaleRow[]>([])
   const [conversations, setConversations] = useState<ConversationRow[]>([])
@@ -1097,7 +1106,7 @@ export default function App() {
 
   useEffect(() => {
     const apiUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? ''
-    void fetch(`${apiUrl}/api/public/config`).then((response) => response.ok ? response.json() as Promise<{ salesWhatsapp?: string }> : null).then((data) => setSalesWhatsapp(String(data?.salesWhatsapp ?? '').replace(/\D/g, ''))).catch(() => undefined)
+    void fetch(`${apiUrl}/api/public/config`).then((response) => response.ok ? response.json() as Promise<{ salesWhatsapp?: string; asaasEnabled?: boolean }> : null).then((data) => { setSalesWhatsapp(String(data?.salesWhatsapp ?? '').replace(/\D/g, '')); setAsaasEnabled(Boolean(data?.asaasEnabled)) }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -1286,7 +1295,7 @@ export default function App() {
   if (!session && route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
   if (!session) return <AccessPage initialMode={route === 'signup' ? 'register' : 'login'} selection={selection} onAuthenticated={authenticateSession} onNavigate={navigate}/>
   if (route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
-  if (account?.access_state === 'expired') return <TrialExpired onSignOut={signOut} account={account} salesWhatsapp={salesWhatsapp}/>
+  if (account?.access_state === 'expired') return <TrialExpired session={session} onSignOut={signOut} account={account} salesWhatsapp={salesWhatsapp} asaasEnabled={asaasEnabled} onActivated={() => void loadWorkspace(session)}/>
   if (!account) return <main className="workspace-loading"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI"/></div><p>{syncError || 'Carregando o espaço da sua empresa...'}</p>{syncError && <button className="session-button" type="button" onClick={signOut}>Voltar ao acesso</button>}</main>
 
   return (

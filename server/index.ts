@@ -21,14 +21,35 @@ import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
 import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
+import {
+  asaasBillingType,
+  asaasConfigured,
+  billingEffectFor,
+  cancelSubscription,
+  createCustomer,
+  createPayment,
+  createSubscription,
+  firstPaymentFor,
+  isRecurring,
+  pixQrCode,
+  boletoIdentificationField,
+  updateSubscriptionCard,
+  AsaasError,
+  type AsaasPayment,
+  type BillingHolder,
+  type BillingMethod,
+} from './asaas.js'
+import { tokenizeCard } from './card-checkout.js'
+import { isValidCpfCnpj } from './document.js'
 
 type Token = { userId: string; companyId: string; role: string }
 type CompanyRow = { company_id: string; role: string; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null }
 
 const app = Fastify({
+  trustProxy: true,
   logger: {
     level: config.nodeEnv === 'production' ? 'info' : 'debug',
-    redact: ['req.headers.authorization', 'req.headers["x-otimiza-webhook-secret"]', 'req.body.accessToken', 'req.body.instanceToken'],
+    redact: ['req.headers.authorization', 'req.headers["x-otimiza-webhook-secret"]', 'req.body.accessToken', 'req.body.instanceToken', 'req.body.card', 'req.body.holder', 'req.body.document'],
     serializers: {
       // O segredo do webhook viaja na URL (?secret=); não pode aparecer nos logs.
       req(request) {
@@ -135,7 +156,7 @@ const registerSchema = z.object({
   channelLimit: z.coerce.number().int().min(1).max(5).default(1),
 })
 
-app.get('/api/public/config', async () => ({ salesWhatsapp: config.salesWhatsapp }))
+app.get('/api/public/config', async () => ({ salesWhatsapp: config.salesWhatsapp, asaasEnabled: asaasConfigured() }))
 
 app.get('/health', async () => {
   await query('SELECT 1')
@@ -766,6 +787,193 @@ app.get('/api/notifications', { preHandler: authenticate }, async (request, repl
     if (days <= 2) notifications.unshift({ id: 'trial-ending', type: 'trial', title: days <= 0 ? 'Seu teste terminou' : `Seu teste termina em ${days} dia${days === 1 ? '' : 's'}`, body: 'Escolha um plano para manter seus dados e integrações ativos.', action: 'Ver planos' })
   }
   return notifications
+})
+
+const billingMethods = ['pix', 'boleto', 'card', 'card_recurring'] as const
+
+const billingHolderSchema = z.object({
+  name: z.string().min(2).max(140),
+  email: z.string().email().max(160),
+  cpfCnpj: z.string().refine(isValidCpfCnpj, 'CPF ou CNPJ inválido.'),
+  phone: z.string().min(10).max(20),
+  postalCode: z.string().min(8).max(9),
+  addressNumber: z.string().min(1).max(20),
+})
+
+const billingCardSchema = z.object({
+  holderName: z.string().min(2).max(140),
+  number: z.string().transform((value) => value.replace(/\D/g, '')).refine((value) => value.length >= 13 && value.length <= 19, 'Número de cartão inválido.'),
+  expiryMonth: z.string().regex(/^(0[1-9]|1[0-2])$/, 'Mês de validade inválido.'),
+  expiryYear: z.string().regex(/^\d{4}$/, 'Ano de validade inválido.'),
+  ccv: z.string().regex(/^\d{3,4}$/, 'CVV inválido.'),
+})
+
+const checkoutSchema = z.object({
+  method: z.enum(billingMethods),
+  holder: billingHolderSchema,
+  card: billingCardSchema.optional(),
+}).refine((value) => (value.method === 'card' || value.method === 'card_recurring') ? Boolean(value.card) : true, { message: 'Informe os dados do cartão.', path: ['card'] })
+
+const billingDescription = (plan: string, channelLimit: number) =>
+  `${plan === 'chatbot' ? 'Otimiza CRM + Chatbot' : 'Otimiza CRM'} · ${channelLimit} número${channelLimit === 1 ? '' : 's'}`
+
+const upsertBillingPayment = (companyId: string, payment: AsaasPayment) => query(
+  `INSERT INTO billing_payments (company_id, asaas_payment_id, asaas_subscription_id, billing_type, value_cents, status, due_date, invoice_url, raw)
+   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+   ON CONFLICT (provider, asaas_payment_id) DO UPDATE SET
+     status = EXCLUDED.status, due_date = EXCLUDED.due_date, invoice_url = EXCLUDED.invoice_url, raw = EXCLUDED.raw, updated_at = now()`,
+  [companyId, payment.id, payment.subscriptionId, payment.billingType, payment.valueCents, payment.status, payment.dueDate, payment.invoiceUrl, JSON.stringify(payment)],
+)
+
+const checkoutResponse = async (method: BillingMethod, payment: AsaasPayment) => {
+  const base = { method, paymentId: payment.id, status: payment.status, dueDate: payment.dueDate, valueCents: payment.valueCents }
+  if (method === 'pix') return { ...base, pix: await pixQrCode(payment.id).catch(() => null) }
+  if (method === 'boleto') return { ...base, boleto: { identificationField: await boletoIdentificationField(payment.id).catch(() => null), invoiceUrl: payment.invoiceUrl } }
+  return base
+}
+
+const lockCardAttempt = (companyId: string) => query(
+  `UPDATE billing_subscriptions SET failed_attempts = failed_attempts + 1,
+     locked_until = CASE WHEN failed_attempts + 1 >= 3 THEN now() + interval '15 minutes' ELSE locked_until END,
+     updated_at = now() WHERE company_id = $1`, [companyId],
+)
+
+const billingLocked = (row: { locked_until: string | null } | undefined) => Boolean(row?.locked_until && new Date(row.locked_until).getTime() > Date.now())
+
+// Checkout dentro do CRM: PIX e boleto geram cobrança para pagar ali mesmo; cartão é tokenizado e cobrado sem redirecionar o cliente.
+app.post('/api/billing/checkout', { preHandler: authenticate, config: { rateLimit: { max: 10, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await companyScope(request, reply, true)
+  if (!scope) return
+  if (!['owner', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Só o titular da conta pode contratar o plano.' })
+  if (!asaasConfigured()) return reply.code(503).send({ error: 'O pagamento ainda não foi configurado no servidor do CRM.' })
+  const parsed = checkoutSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados informados.', details: parsed.error.flatten().fieldErrors })
+  const input = parsed.data
+
+  const companyRow = await query<{ plan: string; channel_limit: number; plan_price_cents: number }>('SELECT plan, channel_limit, plan_price_cents FROM companies WHERE id = $1', [scope.companyId])
+  const billing = companyRow.rows[0]
+  if (!billing || billing.plan_price_cents <= 0) return reply.code(400).send({ error: 'Esta conta não tem um plano pago configurado.' })
+
+  const existingRow = await query<{ asaas_customer_id: string | null; asaas_subscription_id: string | null; locked_until: string | null }>(
+    'SELECT asaas_customer_id, asaas_subscription_id, locked_until FROM billing_subscriptions WHERE company_id = $1', [scope.companyId],
+  )
+  const current = existingRow.rows[0]
+  if (billingLocked(current)) return reply.code(429).send({ error: 'Muitas tentativas de pagamento com cartão. Tente novamente em alguns minutos ou fale com a Otimiza AI pelo WhatsApp.' })
+
+  try {
+    const customerId = current?.asaas_customer_id ?? (await createCustomer(input.holder, scope.companyId)).id
+    await query(
+      `INSERT INTO billing_subscriptions (company_id, plan, channel_limit, price_cents, asaas_customer_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (company_id) DO UPDATE SET plan = EXCLUDED.plan, channel_limit = EXCLUDED.channel_limit, price_cents = EXCLUDED.price_cents, asaas_customer_id = EXCLUDED.asaas_customer_id, updated_at = now()`,
+      [scope.companyId, billing.plan, billing.channel_limit, billing.plan_price_cents, customerId],
+    )
+
+    let cardToken: string | undefined
+    let cardBrand: string | null = null
+    let cardLast4: string | null = null
+    if (input.method === 'card' || input.method === 'card_recurring') {
+      try {
+        const tokenized = await tokenizeCard(customerId, input.card!, input.holder, request.ip)
+        cardToken = tokenized.token
+        cardBrand = tokenized.brand
+        cardLast4 = tokenized.last4
+      } catch (error) {
+        await lockCardAttempt(scope.companyId)
+        throw error
+      }
+    }
+
+    if (current?.asaas_subscription_id) await cancelSubscription(current.asaas_subscription_id).catch(() => undefined)
+
+    const asaasType = asaasBillingType(input.method)
+    const description = billingDescription(billing.plan, billing.channel_limit)
+    const charge = { customerId, billingType: asaasType, valueCents: billing.plan_price_cents, description, externalReference: scope.companyId, creditCardToken: cardToken }
+
+    let payment: AsaasPayment
+    let subscriptionId: string | null = null
+    if (isRecurring(input.method)) {
+      const subscription = await createSubscription(charge)
+      subscriptionId = subscription.id
+      payment = await firstPaymentFor(subscription.id)
+    } else {
+      payment = await createPayment(charge)
+    }
+    await upsertBillingPayment(scope.companyId, payment)
+
+    await query(
+      `UPDATE billing_subscriptions SET billing_type = $2, auto_renew = $3, cycle = $4, asaas_subscription_id = $5,
+         card_token_encrypted = $6, card_brand = $7, card_last4 = $8, status = 'pending', last_payment_id = $9,
+         next_due_date = $10, failed_attempts = 0, locked_until = NULL, last_event_at = now(), updated_at = now()
+       WHERE company_id = $1`,
+      [scope.companyId, input.method, input.method === 'card_recurring', isRecurring(input.method) ? 'MONTHLY' : null, subscriptionId,
+        cardToken ? encryptSecret(cardToken) : null, cardBrand, cardLast4, payment.id, payment.dueDate],
+    )
+
+    return reply.code(201).send(await checkoutResponse(input.method, payment))
+  } catch (error) {
+    if (error instanceof AsaasError) return reply.code(error.status >= 500 ? 502 : 400).send({ error: error.message })
+    throw error
+  }
+})
+
+app.get('/api/billing/current', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply, true)
+  if (!scope) return
+  const { rows } = await query<{ billing_type: string | null; status: string; card_brand: string | null; card_last4: string | null; last_payment_id: string | null; next_due_date: string | null; auto_renew: boolean }>(
+    'SELECT billing_type, status, card_brand, card_last4, last_payment_id, next_due_date, auto_renew FROM billing_subscriptions WHERE company_id = $1', [scope.companyId],
+  )
+  const subscription = rows[0] ?? null
+  if (!subscription?.last_payment_id) return { subscription, payment: null, pix: null, boleto: null }
+
+  const paymentRows = await query<{ status: string; value_cents: number; due_date: string | null; invoice_url: string | null }>(
+    'SELECT status, value_cents, due_date, invoice_url FROM billing_payments WHERE company_id = $1 AND asaas_payment_id = $2', [scope.companyId, subscription.last_payment_id],
+  )
+  const payment = paymentRows.rows[0] ?? null
+
+  let pix: { payload: string; encodedImage: string | null; expirationDate: string | null } | null = null
+  let boleto: { identificationField: string | null; invoiceUrl: string | null } | null = null
+  if (payment && ['PENDING', 'AWAITING_RISK_ANALYSIS'].includes(payment.status)) {
+    if (subscription.billing_type === 'pix') pix = await pixQrCode(subscription.last_payment_id).catch(() => null)
+    if (subscription.billing_type === 'boleto') boleto = { identificationField: await boletoIdentificationField(subscription.last_payment_id).catch(() => null), invoiceUrl: payment.invoice_url }
+  }
+  return { subscription, payment, pix, boleto }
+})
+
+const cardUpdateSchema = z.object({ holder: billingHolderSchema, card: billingCardSchema })
+
+// Troca de cartão de uma assinatura recorrente (cartão recusado, vencido, ou cliente trocou de banco) — não exige novo checkout.
+app.put('/api/billing/card', { preHandler: authenticate, config: { rateLimit: { max: 10, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await companyScope(request, reply, true)
+  if (!scope) return
+  if (!['owner', 'otimiza_admin'].includes(scope.role)) return reply.code(403).send({ error: 'Só o titular da conta pode atualizar o cartão.' })
+  if (!asaasConfigured()) return reply.code(503).send({ error: 'O pagamento ainda não foi configurado no servidor do CRM.' })
+  const parsed = cardUpdateSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Confira os dados informados.', details: parsed.error.flatten().fieldErrors })
+
+  const existingRow = await query<{ asaas_customer_id: string | null; asaas_subscription_id: string | null; billing_type: string | null; locked_until: string | null }>(
+    'SELECT asaas_customer_id, asaas_subscription_id, billing_type, locked_until FROM billing_subscriptions WHERE company_id = $1', [scope.companyId],
+  )
+  const current = existingRow.rows[0]
+  if (billingLocked(current)) return reply.code(429).send({ error: 'Muitas tentativas de pagamento com cartão. Tente novamente em alguns minutos ou fale com a Otimiza AI pelo WhatsApp.' })
+  if (!current?.asaas_customer_id || current.billing_type !== 'card_recurring' || !current.asaas_subscription_id) {
+    return reply.code(400).send({ error: 'Esta conta não está em cobrança recorrente por cartão.' })
+  }
+
+  try {
+    const tokenized = await tokenizeCard(current.asaas_customer_id, parsed.data.card, parsed.data.holder, request.ip)
+    await updateSubscriptionCard(current.asaas_subscription_id, tokenized.token)
+    await query(
+      `UPDATE billing_subscriptions SET card_token_encrypted = $2, card_brand = $3, card_last4 = $4, status = 'pending', failed_attempts = 0, locked_until = NULL, updated_at = now()
+       WHERE company_id = $1`,
+      [scope.companyId, encryptSecret(tokenized.token), tokenized.brand, tokenized.last4],
+    )
+    return { ok: true, cardBrand: tokenized.brand, cardLast4: tokenized.last4 }
+  } catch (error) {
+    await lockCardAttempt(scope.companyId)
+    if (error instanceof AsaasError) return reply.code(error.status >= 500 ? 502 : 400).send({ error: error.message })
+    throw error
+  }
 })
 
 const connectionSchema = z.object({
@@ -1704,6 +1912,97 @@ app.post('/webhooks/n8n/:companyId', async (request, reply) => {
   }
   await query('UPDATE integration_events SET processed_at = now() WHERE id = $1', [inserted.rows[0].id])
   return reply.code(202).send({ received: true, eventId: inserted.rows[0].id })
+})
+
+app.post('/webhooks/asaas', { config: { logLevel: 'warn' } }, async (request, reply) => {
+  const sentToken = request.headers['asaas-access-token']
+  if (!config.asaasWebhookToken || typeof sentToken !== 'string' || !safeEqual(sentToken, config.asaasWebhookToken)) {
+    return reply.code(401).send({ error: 'Webhook não autorizado.' })
+  }
+  const payload = request.body as Record<string, unknown>
+  const eventType = String(payload.event ?? '')
+  const paymentPayload = record(payload.payment)
+  const paymentId = typeof paymentPayload.id === 'string' ? paymentPayload.id : ''
+  if (!paymentId) return reply.code(200).send({ received: true })
+
+  const subscriptionId = typeof paymentPayload.subscription === 'string' ? paymentPayload.subscription : null
+  const customerId = typeof paymentPayload.customer === 'string' ? paymentPayload.customer : null
+  const externalReference = typeof paymentPayload.externalReference === 'string' ? paymentPayload.externalReference : null
+
+  // Resolve a empresa em cascata: referência explícita primeiro, depois a assinatura, depois o cliente no Asaas.
+  let companyId: string | null = null
+  if (externalReference) {
+    const byReference = await query<{ id: string }>('SELECT id FROM companies WHERE id = $1', [externalReference])
+    companyId = byReference.rows[0]?.id ?? null
+  }
+  if (!companyId && subscriptionId) {
+    const bySubscription = await query<{ company_id: string }>('SELECT company_id FROM billing_subscriptions WHERE asaas_subscription_id = $1', [subscriptionId])
+    companyId = bySubscription.rows[0]?.company_id ?? null
+  }
+  if (!companyId && customerId) {
+    const byCustomer = await query<{ company_id: string }>('SELECT company_id FROM billing_subscriptions WHERE asaas_customer_id = $1', [customerId])
+    companyId = byCustomer.rows[0]?.company_id ?? null
+  }
+  if (!companyId) {
+    app.log.warn({ eventType, paymentId }, 'Webhook do Asaas sem empresa correspondente.')
+    return reply.code(200).send({ received: true })
+  }
+
+  const eventId = typeof payload.id === 'string' && payload.id ? payload.id : `${paymentId}:${eventType}`
+  const inserted = await query<{ id: string }>(
+    `INSERT INTO integration_events (company_id, provider, external_event_id, event_type, payload)
+     VALUES ($1, 'asaas', $2, $3, $4::jsonb) ON CONFLICT (provider, external_event_id) DO NOTHING RETURNING id`,
+    [companyId, eventId, eventType, JSON.stringify(payload)],
+  )
+  if (!inserted.rows[0]) return reply.code(200).send({ received: true, duplicate: true })
+
+  const valueCents = Math.round(Number(paymentPayload.value ?? 0) * 100)
+  const billingType = typeof paymentPayload.billingType === 'string' ? paymentPayload.billingType : null
+  const dueDate = typeof paymentPayload.dueDate === 'string' ? paymentPayload.dueDate : null
+  const invoiceUrl = typeof paymentPayload.invoiceUrl === 'string' ? paymentPayload.invoiceUrl : null
+  const status = typeof paymentPayload.status === 'string' ? paymentPayload.status : eventType
+  const paidAt = typeof paymentPayload.paymentDate === 'string' ? paymentPayload.paymentDate : null
+
+  await query(
+    `INSERT INTO billing_payments (company_id, asaas_payment_id, asaas_subscription_id, billing_type, value_cents, status, due_date, paid_at, invoice_url, raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+     ON CONFLICT (provider, asaas_payment_id) DO UPDATE SET
+       status = EXCLUDED.status, due_date = EXCLUDED.due_date, paid_at = EXCLUDED.paid_at, invoice_url = EXCLUDED.invoice_url, raw = EXCLUDED.raw, updated_at = now()`,
+    [companyId, paymentId, subscriptionId, billingType, valueCents, status, dueDate, paidAt, invoiceUrl, JSON.stringify(paymentPayload)],
+  )
+
+  const effect = billingEffectFor(eventType)
+  const subscriptionRow = await query<{ price_cents: number }>('SELECT price_cents FROM billing_subscriptions WHERE company_id = $1', [companyId])
+  const expectedCents = subscriptionRow.rows[0]?.price_cents ?? 0
+
+  if (effect === 'activate' && valueCents >= expectedCents) {
+    await query(`UPDATE companies SET billing_status = 'active', updated_at = now() WHERE id = $1`, [companyId])
+    await query(
+      `UPDATE billing_subscriptions SET status = 'active', last_payment_id = $2, last_event_at = now(), failed_attempts = 0, locked_until = NULL, updated_at = now() WHERE company_id = $1`,
+      [companyId, paymentId],
+    )
+    await query(
+      `INSERT INTO audit_logs (company_id, action, entity_type, entity_id, metadata) VALUES ($1, 'billing.activated', 'company', $1, $2::jsonb)`,
+      [companyId, JSON.stringify({ paymentId, eventType, valueCents })],
+    )
+  } else if (effect === 'suspend') {
+    await query(`UPDATE companies SET billing_status = 'expired', updated_at = now() WHERE id = $1`, [companyId])
+    await query(`UPDATE billing_subscriptions SET status = 'overdue', last_event_at = now(), updated_at = now() WHERE company_id = $1`, [companyId])
+    await query(
+      `INSERT INTO audit_logs (company_id, action, entity_type, entity_id, metadata) VALUES ($1, 'billing.suspended', 'company', $1, $2::jsonb)`,
+      [companyId, JSON.stringify({ paymentId, eventType })],
+    )
+  } else if (effect === 'refused') {
+    await query(`UPDATE billing_subscriptions SET status = 'refused', last_event_at = now(), updated_at = now() WHERE company_id = $1`, [companyId])
+    await query(
+      `INSERT INTO audit_logs (company_id, action, entity_type, entity_id, metadata) VALUES ($1, 'billing.card_refused', 'company', $1, $2::jsonb)`,
+      [companyId, JSON.stringify({ paymentId, eventType })],
+    )
+  } else {
+    await query(`UPDATE billing_subscriptions SET last_event_at = now(), updated_at = now() WHERE company_id = $1`, [companyId])
+  }
+
+  return reply.code(200).send({ received: true })
 })
 
 app.get('/*', async (request, reply) => {

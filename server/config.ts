@@ -16,4 +16,5 @@ export const config = {
   crmPublicUrl: process.env.CRM_PUBLIC_URL?.replace(/\/$/, '') ?? '',
   salesWhatsapp: (process.env.SALES_WHATSAPP ?? '').replace(/\D/g, ''),
   allowedOrigins: (process.env.ALLOW_ORIGINS ?? 'http://localhost:5173').split(',').map((item) => item.trim()),
+  asaasWebhookToken: process.env.ASAAS_WEBHOOK_TOKEN ?? '',
 }

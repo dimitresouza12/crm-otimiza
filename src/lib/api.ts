@@ -14,6 +14,16 @@ export type ChatMessage = { id: string; direction: 'inbound' | 'outbound'; messa
 
 export type CatalogItem = { name: string; price: number | null; description?: string }
 export type BusinessHours = { enabled: boolean; days: number[]; start: string; end: string; periods?: Array<{ start: string; end: string }> }
+
+export type BillingMethod = 'pix' | 'boleto' | 'card' | 'card_recurring'
+export type BillingHolderInput = { name: string; email: string; cpfCnpj: string; phone: string; postalCode: string; addressNumber: string }
+export type BillingCardInput = { holderName: string; number: string; expiryMonth: string; expiryYear: string; ccv: string }
+export type PixQrCode = { payload: string; encodedImage: string | null; expirationDate: string | null }
+export type BoletoInfo = { identificationField: string | null; invoiceUrl: string | null }
+export type BillingCheckoutResult = { method: BillingMethod; paymentId: string; status: string; dueDate: string | null; valueCents: number; pix?: PixQrCode | null; boleto?: BoletoInfo | null }
+export type BillingSubscription = { billing_type: BillingMethod | null; status: 'pending' | 'active' | 'overdue' | 'refused' | 'canceled'; card_brand: string | null; card_last4: string | null; last_payment_id: string | null; next_due_date: string | null; auto_renew: boolean }
+export type BillingPayment = { status: string; value_cents: number; due_date: string | null; invoice_url: string | null }
+export type BillingCurrent = { subscription: BillingSubscription | null; payment: BillingPayment | null; pix: PixQrCode | null; boleto: BoletoInfo | null }
 export type LeadRequestData = { id: string; kind: 'meeting' | 'handoff'; text: string | null; when: string | null; at: string }
 export type LocationData = { id: string; city: string; aliases?: string[]; phone: string; label?: string }
 export type BotSettingsData = { locations: LocationData[]; ask_city: boolean; location_message: string | null; handoff_on_fallback: boolean; is_active: boolean; welcome_message: string | null; fallback_message: string | null; off_hours_message: string | null; business_hours: BusinessHours; bot_mode: 'always' | 'outside_hours'; catalog: CatalogItem[]; price_replies_enabled: boolean; ai_enabled: boolean; promotion_message: string | null; promotion_in_welcome: boolean }
@@ -99,4 +109,7 @@ export const api = {
   chatbotTest: (session: Session, input: { message: string; firstMessage?: boolean; at?: string; asPhone?: string; draft?: Omit<BotSettingsInput, 'isActive' | 'aiEnabled' | 'handoffOnFallback'> }) => request<{ reply: string | null; source: 'keyword' | 'price' | 'welcome' | 'off_hours' | 'fallback' | 'schedule' | 'human' | 'location' | 'silent'; ruleName: string | null; withinHours: boolean; silentReason: 'inside_hours' | 'nothing_matched' | null }>('/api/chatbot/test', { method: 'POST', body: JSON.stringify(input) }, session),
   opportunityAi: (session: Session, opportunityId: string) => request<{ summary: string | null; summaryAt: string | null; events: Array<{ id: string; reason: string | null; confidence: string | null; applied: Record<string, { from?: string | number | null; to?: string | number; amount?: number; status?: string }>; created_at: string }> }>(`/api/opportunities/${opportunityId}/ai`, {}, session),
   deleteChatbotRule: (session: Session, ruleId: string) => request(`/api/chatbot/rules/${ruleId}`, { method: 'DELETE' }, session),
+  billingCurrent: (session: Session) => request<BillingCurrent>('/api/billing/current', {}, session),
+  billingCheckout: (session: Session, input: { method: BillingMethod; holder: BillingHolderInput; card?: BillingCardInput }) => request<BillingCheckoutResult>('/api/billing/checkout', { method: 'POST', body: JSON.stringify(input) }, session),
+  updateBillingCard: (session: Session, input: { holder: BillingHolderInput; card: BillingCardInput }) => request<{ ok: true; cardBrand: string | null; cardLast4: string | null }>('/api/billing/card', { method: 'PUT', body: JSON.stringify(input) }, session),
 }
