@@ -7,6 +7,8 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   CircleDollarSign,
   CircleHelp,
   CheckCircle2,
@@ -38,7 +40,7 @@ import {
   X,
 } from 'lucide-react'
 import otimizaSymbol from './assets/otimiza-ai-symbol.svg'
-import { api, type Session } from './lib/api'
+import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 import { BillingCheckout } from './BillingCheckout'
@@ -65,7 +67,11 @@ type Lead = {
   temperature: 'Quente' | 'Morno' | 'Novo'
   owner: string
   avatar: string
+  requests?: LeadRequestData[]
 }
+
+const requestLabel = { meeting: 'Pediu reunião ou horário', handoff: 'Quer falar com um atendente' } as const
+const requestBadge = { meeting: 'Reunião', handoff: 'Atendente' } as const
 
 const stages: Stage[] = ['Novos leads', 'Qualificados', 'Proposta enviada', 'Negociação', 'Ganhos', 'Perdidos']
 const channels: Channel[] = ['Todos os canais', 'Comercial', 'Unidade Aldeota', 'Pós-venda']
@@ -237,19 +243,46 @@ function LeadInterest({ temperature }: { temperature: Lead['temperature'] }) {
   return <span className={`temperature temperature--${temperature.toLowerCase()}`} title={interest.description}><i aria-hidden="true" />{interest.label}</span>
 }
 
+// Símbolo oficial do WhatsApp (balão com o fone). Usa a cor do texto, então fica branco sobre o verde da marca.
 function WhatsAppIcon({ size = 16 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-11.78 7.05L4 20l1.48-4.02A8 8 0 1 1 20 11.5Z" fill="currentColor"/><path d="M9.05 7.75c.18-.43.36-.44.63-.44h.54c.16 0 .38.06.49.35l.75 1.78c.08.19.05.4-.08.55l-.43.54c-.09.1-.12.25-.06.37.25.53.72 1.17 1.28 1.62.57.46 1.24.79 1.79.95.13.04.27 0 .36-.11l.46-.55c.13-.15.33-.21.51-.13l1.69.79c.28.13.32.35.29.51-.1.58-.34 1.09-.77 1.33-.3.17-.7.31-1.16.24-1.02-.17-2.35-.88-3.54-1.98-1.19-1.09-1.95-2.42-2.15-3.41-.1-.46.01-.87.15-1.2Z" fill="#fff"/></svg>
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
 }
 
-function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd }: { lead: Lead; onClick: () => void; onOpenChat?: () => void; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void }) {
+// "há 141 horas" -> "141 h": cabe no card compacto sem cortar.
+const compactTime = (value: string) => {
+  if (/agora|esta hora|este minuto|hoje/i.test(value)) return 'agora'
+  const match = value.match(/(\d+)\s+(minuto|hora|dia|semana|mês|meses|ano)/i)
+  if (!match) return value.replace(/^há\s+/, '')
+  const unit = { minuto: 'min', hora: 'h', dia: 'd', semana: 'sem', 'mês': 'mês', meses: 'mês', ano: 'ano' }[match[2].toLowerCase()] ?? match[2]
+  return `${match[1]} ${unit}`
+}
+
+function RequestBadges({ lead }: { lead: Lead }) {
+  const kinds = [...new Set((lead.requests ?? []).map((request) => request.kind))]
+  if (!kinds.length) return null
+  return <div className="lead-card__alerts">{kinds.map((kind) => <span key={kind} className={`lead-alert lead-alert--${kind}`} title={(lead.requests ?? []).find((request) => request.kind === kind)?.text ?? requestLabel[kind]}>{kind === 'meeting' ? <CalendarDays size={11} /> : <MessageCircleMore size={11} />}{requestBadge[kind]}</span>)}</div>
+}
+
+function LeadCard({ lead, onClick, onOpenChat, onDragStart, onDragEnd, compact = false }: { lead: Lead; onClick: () => void; onOpenChat?: () => void; onDragStart?: (event: DragEvent<HTMLButtonElement>) => void; onDragEnd?: () => void; compact?: boolean }) {
+  if (compact) {
+    return (
+      <button className="lead-card lead-card--compact" onClick={onClick} type="button" draggable={Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd} title={`${lead.name} · ${lead.source} · ${lead.channel}`}>
+        <div className="lead-card__head"><Avatar initials={lead.initials} small /><strong>{lead.name}</strong>{onOpenChat && <span className="lead-card__actions"><span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={17} /></span></span>}</div>
+        <p>{lead.lastMessage}</p>
+        <RequestBadges lead={lead} />
+        <div className="lead-card__foot"><LeadInterest temperature={lead.temperature} /><span className="lead-card__time" title={lead.time}>{compactTime(lead.time)}</span><b>{lead.value ? money(lead.value) : '—'}</b></div>
+      </button>
+    )
+  }
   return (
     <button className="lead-card" onClick={onClick} type="button" draggable={Boolean(onDragStart)} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="lead-card__top">
         <Avatar initials={lead.initials} />
         <LeadInterest temperature={lead.temperature} />
       </div>
-      <div className="lead-card__name-row"><strong>{lead.name}</strong>{onOpenChat && <span className="lead-card__actions"><span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={15} /></span></span>}</div>
+      <div className="lead-card__name-row"><strong>{lead.name}</strong>{onOpenChat && <span className="lead-card__actions"><span className="lead-card__chat lead-card__chat--whatsapp" role="button" tabIndex={0} title="Abrir conversa no WhatsApp" aria-label={`Abrir conversa no WhatsApp com ${lead.name}`} draggable={false} onClick={(event) => { event.stopPropagation(); onOpenChat() }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpenChat() } }}><WhatsAppIcon size={17} /></span></span>}</div>
       <p>{lead.lastMessage}</p>
+      <RequestBadges lead={lead} />
       <div className="lead-card__tags"><span>{lead.source}</span><span>{lead.channel}</span></div>
       <div className="lead-card__footer">
         <span><Clock3 size={14} />{lead.time}</span>
@@ -463,10 +496,19 @@ function Dashboard({ session, onNavigate, onOpenLead, onFocusStage, onSearchLead
 }
 
 function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, onOpenChat, focusStage, onFocusHandled }: { leads: Lead[]; channel: Channel; setChannel: (channel: Channel) => void; onSelectLead: (lead: Lead) => void; onAddLead: () => void; onOpenChat?: (lead: Lead) => void; onMoveLead: (leadId: Lead['id'], stage: Stage) => void; focusStage?: Stage | null; onFocusHandled?: () => void }) {
+  const readPref = <T,>(key: string, fallback: T): T => { try { const raw = localStorage.getItem(key); return raw === null ? fallback : JSON.parse(raw) as T } catch { return fallback } }
+  const [compact, setCompact] = useState<boolean>(() => readPref('otimiza-kanban-compact', true))
+  const [finalOpen, setFinalOpen] = useState<Stage[]>(() => readPref<Stage[]>('otimiza-kanban-final-open', []))
+  const savePref = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)) } catch { /* sem armazenamento */ } }
+  const isFinalStage = (stage: Stage) => stage === 'Ganhos' || stage === 'Perdidos'
+  const isCollapsed = (stage: Stage) => isFinalStage(stage) && !finalOpen.includes(stage)
+  const toggleFinal = (stage: Stage) => setFinalOpen((current) => { const next = current.includes(stage) ? current.filter((item) => item !== stage) : [...current, stage]; savePref('otimiza-kanban-final-open', next); return next })
+  const chooseDensity = (value: boolean) => { setCompact(value); savePref('otimiza-kanban-compact', value) }
   const [spotlight, setSpotlight] = useState<Stage | null>(null)
   useEffect(() => {
     if (!focusStage) return
-    document.querySelector<HTMLElement>(`.kanban-column[data-stage="${focusStage}"]`)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', inline: 'center', block: 'nearest' })
+    if (isFinalStage(focusStage) && !finalOpen.includes(focusStage)) toggleFinal(focusStage)
+    window.requestAnimationFrame(() => document.querySelector<HTMLElement>(`.kanban-column[data-stage="${focusStage}"]`)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', inline: 'center', block: 'nearest' }))
     setSpotlight(focusStage)
     onFocusHandled?.()
   }, [focusStage])
@@ -479,6 +521,11 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
   const [overStage, setOverStage] = useState<Stage | null>(null)
   const [search, setSearch] = useState('')
   const searchTerm = search.trim().toLocaleLowerCase('pt-BR')
+  const dropHandlers = (stage: Stage) => ({
+    onDragOver: (event: DragEvent<HTMLElement>) => { if (draggingId === null) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (overStage !== stage) setOverStage(stage) },
+    onDragLeave: (event: DragEvent<HTMLElement>) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOverStage((current) => current === stage ? null : current) },
+    onDrop: (event: DragEvent<HTMLElement>) => { event.preventDefault(); if (draggingId !== null) onMoveLead(draggingId, stage); setDraggingId(null); setOverStage(null) },
+  })
   const visible = useMemo(() => leads.filter((lead) => {
     const isChannelMatch = channel === 'Todos os canais' || lead.channel === channel
     const isSearchMatch = !searchTerm || `${lead.name} ${lead.phone ?? ''} ${lead.source}`.toLocaleLowerCase('pt-BR').includes(searchTerm)
@@ -490,24 +537,25 @@ function Crm({ leads, channel, setChannel, onSelectLead, onAddLead, onMoveLead, 
         <div><span className="eyebrow">PIPELINE COMERCIAL</span><h1>CRM</h1><p>Acompanhe cada conversa até a venda confirmada.</p></div>
         <div className="head-actions"><label className="channel-select"><Activity size={16}/><select value={channel} onChange={(event) => setChannel(event.target.value as Channel)}>{channels.map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={16}/></label><button className="primary-button" type="button" onClick={onAddLead}><Plus size={18} /> Novo lead</button></div>
       </section>
-      <section className="crm-toolbar"><div className="lead-search"><div className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead ou telefone" aria-label="Buscar lead ou telefone" /></div>{searchTerm && <div className="lead-search__results" role="listbox" aria-label="Leads encontrados">{visible.slice(0, 5).map((lead) => <button className="lead-search__result" type="button" role="option" key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(''); onSelectLead(lead) }}><Avatar initials={lead.initials} small/><span><b>{lead.name}</b><small>{lead.phone || lead.source}</small></span><ChevronRight size={15}/></button>)}{!visible.length && <p>Nenhum lead encontrado.</p>}</div>}</div><button className="toolbar-button" type="button"><Filter size={16} /> Filtros</button><button className="toolbar-button" type="button"><Settings2 size={16} /> Etapas</button><span className="toolbar-spacer"/><span className="sync-status"><i /> WhatsApp sincronizado agora</span></section>
+      <section className="crm-toolbar"><div className="lead-search"><div className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead ou telefone" aria-label="Buscar lead ou telefone" /></div>{searchTerm && <div className="lead-search__results" role="listbox" aria-label="Leads encontrados">{visible.slice(0, 5).map((lead) => <button className="lead-search__result" type="button" role="option" key={lead.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(''); onSelectLead(lead) }}><Avatar initials={lead.initials} small/><span><b>{lead.name}</b><small>{lead.phone || lead.source}</small></span><ChevronRight size={15}/></button>)}{!visible.length && <p>Nenhum lead encontrado.</p>}</div>}</div><button className="toolbar-button" type="button"><Filter size={16} /> Filtros</button><button className="toolbar-button" type="button"><Settings2 size={16} /> Etapas</button><div className="density-toggle" role="group" aria-label="Tamanho dos cards"><button type="button" aria-pressed={compact} onClick={() => chooseDensity(true)}>Compacto</button><button type="button" aria-pressed={!compact} onClick={() => chooseDensity(false)}>Confortável</button></div><span className="toolbar-spacer"/><span className="sync-status"><i /> WhatsApp sincronizado agora</span></section>
       <div className="kanban-shell">
       <div className="kanban-scroll-guide" aria-label="Há mais etapas do funil à direita"><span>Deslize para ver as próximas etapas</span><ArrowRight size={17}/></div>
-      <section className="kanban" aria-label="Pipeline de vendas">
+      <section className={`kanban${compact ? ' kanban--compact' : ''}`} aria-label="Pipeline de vendas" style={{ gridTemplateColumns: stages.map((stage) => isCollapsed(stage) ? '60px' : compact ? 'minmax(216px, 1fr)' : 'minmax(250px, 1fr)').join(' ') }}>
         {stages.map((stage, index) => {
           const columnLeads = visible.filter((lead) => lead.stage === stage)
           const total = columnLeads.reduce((sum, lead) => sum + (lead.value ?? 0), 0)
+          if (isCollapsed(stage)) return <article className={`kanban-column kanban-column--collapsed column-${index + 1}${overStage === stage ? ' kanban-column--over' : ''}${spotlight === stage ? ' kanban-column--spotlight' : ''}`} data-stage={stage} key={stage} {...dropHandlers(stage)}>
+            <button type="button" className="kanban-strip" aria-expanded={false} aria-label={`${stage}: ${columnLeads.length} ${columnLeads.length === 1 ? 'lead' : 'leads'}. Expandir coluna`} title={`Expandir ${stage}`} onClick={() => toggleFinal(stage)}><ChevronsLeft size={15}/><span className="kanban-strip__name"><i className="column-marker"/>{stage}</span><b>{columnLeads.length}</b><small>{total ? money(total) : '—'}</small></button>
+          </article>
           return <article
             className={`kanban-column column-${index + 1}${overStage === stage ? ' kanban-column--over' : ''}${spotlight === stage ? ' kanban-column--spotlight' : ''}`}
             data-stage={stage}
             key={stage}
-            onDragOver={(event) => { if (draggingId === null) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; if (overStage !== stage) setOverStage(stage) }}
-            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOverStage((current) => current === stage ? null : current) }}
-            onDrop={(event) => { event.preventDefault(); if (draggingId !== null) onMoveLead(draggingId, stage); setDraggingId(null); setOverStage(null) }}
+            {...dropHandlers(stage)}
           >
-            <header><div><span className="column-marker"/><h2>{stage}</h2><b>{columnLeads.length}</b></div><button type="button" aria-label={`Ações de ${stage}`}><MoreHorizontal size={18}/></button></header>
+            <header><div><span className="column-marker"/><h2>{stage}</h2><b>{columnLeads.length}</b></div>{isFinalStage(stage) ? <button type="button" aria-label={`Recolher ${stage}`} title="Recolher coluna" onClick={() => toggleFinal(stage)}><ChevronsRight size={17}/></button> : <button type="button" aria-label={`Ações de ${stage}`}><MoreHorizontal size={18}/></button>}</header>
             <div className="column-value">{total ? money(total) : '—'}</div>
-            <div className="column-cards">{columnLeads.map((lead) => <LeadCard key={lead.id} lead={lead} onClick={() => onSelectLead(lead)} onOpenChat={onOpenChat && lead.phone ? () => onOpenChat(lead) : undefined} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(lead.id)); setDraggingId(lead.id) }} onDragEnd={() => { setDraggingId(null); setOverStage(null) }} />)}</div>
+            <div className="column-cards">{columnLeads.map((lead) => <LeadCard key={lead.id} lead={lead} compact={compact} onClick={() => onSelectLead(lead)} onOpenChat={onOpenChat && lead.phone ? () => onOpenChat(lead) : undefined} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(lead.id)); setDraggingId(lead.id) }} onDragEnd={() => { setDraggingId(null); setOverStage(null) }} />)}</div>
             <button className="add-card" type="button" onClick={onAddLead}><Plus size={16} /> Adicionar lead</button>
           </article>
         })}
@@ -937,8 +985,14 @@ const describeAiChange = (applied: AiInfo['events'][number]['applied']) => [
   applied.sale && `Venda detectada de ${money(Number(applied.sale.amount))} (em revisão)`,
 ].filter(Boolean) as string[]
 
-function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourceSaved }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void; onSourceSaved: (source: string) => Promise<void> }) {
+function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourceSaved, onOpenChat, onResolveRequest }: { lead: Lead; session: Session | null; onClose: () => void; onAdvance: () => void; onRegisterSale: () => void; onSourceSaved: (source: string) => Promise<void>; onOpenChat?: () => void; onResolveRequest: (requestId: string) => Promise<void> }) {
   const currentIndex = stages.indexOf(lead.stage)
+  const [resolving, setResolving] = useState<string | null>(null)
+  const [requestError, setRequestError] = useState('')
+  const resolveRequest = async (requestId: string) => {
+    setResolving(requestId); setRequestError('')
+    try { await onResolveRequest(requestId) } catch (reason) { setRequestError(reason instanceof Error ? reason.message : 'Não foi possível marcar como tratado.') } finally { setResolving(null) }
+  }
   const [ai, setAi] = useState<AiInfo | null>(null)
   const [editingSource, setEditingSource] = useState(false)
   const [source, setSource] = useState(lead.source)
@@ -965,6 +1019,12 @@ function LeadDrawer({ lead, session, onClose, onAdvance, onRegisterSale, onSourc
     <header className="drawer__header"><button onClick={onClose} type="button" aria-label="Fechar detalhes"><X size={20}/></button><span>DETALHE DO LEAD</span><button type="button" aria-label="Mais ações"><MoreHorizontal size={21}/></button></header>
     <div className="drawer__person"><Avatar initials={lead.initials}/><div><h2>{lead.name}</h2><p>{lead.phone ? `+${lead.phone.replace(/\D/g, '')}` : 'Sem telefone'}</p></div><button className="icon-button" type="button" aria-label="Abrir WhatsApp"><MessageCircleMore size={18}/></button></div>
     <div className="drawer__stage"><span>ETAPA ATUAL</span><button type="button">{lead.stage}<ChevronDown size={16}/></button></div>
+    {!!lead.requests?.length && <section className="drawer__section drawer__requests"><h3>Precisa da sua atenção</h3>{requestError && <p className="form-error">{requestError}</p>}<ul>{lead.requests.map((request) => <li key={request.id} className={`request--${request.kind}`}>
+      <div className="request__head"><b>{request.kind === 'meeting' ? <CalendarDays size={15} /> : <MessageCircleMore size={15} />}{requestLabel[request.kind]}</b><small>{new Date(request.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></div>
+      {request.when && <p className="request__when">Horário citado: <strong>{request.when}</strong></p>}
+      {request.text && <blockquote>“{request.text}”</blockquote>}
+      <div className="request__actions">{onOpenChat && <button className="secondary-button" type="button" onClick={onOpenChat}>Abrir conversa</button>}<button className="primary-button" type="button" disabled={resolving === request.id} onClick={() => void resolveRequest(request.id)}>{resolving === request.id ? 'Salvando...' : 'Marcar como tratado'}</button></div>
+    </li>)}</ul></section>}
     {ai?.summary && <div className="drawer__insight"><Sparkles size={18}/><div><b>Leitura da Otimiza AI</b><p>{ai.summary}</p></div></div>}
     {!!ai?.events.length && <section className="drawer__section"><h3>Por que mudou?</h3><ul className="ai-history">{ai.events.map((event) => <li key={event.id}><b>{describeAiChange(event.applied).join(' · ')}</b>{event.reason && <p>{event.reason}</p>}<small>{new Date(event.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small></li>)}</ul></section>}
     <section className="drawer__section"><h3>Resumo comercial</h3><div className="detail-grid"><div><span>Valor identificado</span><strong>{lead.value ? money(lead.value) : 'Ainda não identificado'}</strong></div><div><span>Origem</span><strong>{lead.source}</strong><button className="drawer-source-edit" type="button" onClick={() => { setSource(lead.source); setEditingSource(!editingSource) }}>{editingSource ? 'Cancelar' : 'Corrigir origem'}</button></div><div><span>Responsável</span><strong>{lead.owner}</strong></div><div><span>Canal</span><strong>{lead.channel}</strong></div></div>{editingSource && <form className="drawer-source-form" onSubmit={saveSource}><label>Origem ou nome exato da campanha<input required list="drawer-source-options" maxLength={120} value={source} onChange={(event) => setSource(event.target.value)}/><datalist id="drawer-source-options">{sourceOptions.map((item) => <option key={item} value={item}/>)}</datalist></label><button className="primary-button" type="submit" disabled={savingSource}>{savingSource ? 'Salvando...' : 'Salvar origem'}</button>{sourceError && <p className="form-error">{sourceError}</p>}</form>}</section>
@@ -1012,6 +1072,15 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  // Com o menu aberto no celular, o gesto de rolar vale para o menu, não para a página de trás.
+  useEffect(() => {
+    if (!mobileMenuOpen) return
+    const overflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') setMobileMenuOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => { document.body.style.overflow = overflow; document.removeEventListener('keydown', onKey) }
+  }, [mobileMenuOpen])
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [showLeadForm, setShowLeadForm] = useState(false)
   const [showSaleForm, setShowSaleForm] = useState(false)
@@ -1092,6 +1161,7 @@ export default function App() {
       temperature: temperatureLabel[opportunity.temperature] ?? 'Novo',
       owner: me.name,
       avatar: initialsFor(me.name),
+      requests: opportunity.requests ?? [],
     })))
     setStageIds(Object.fromEntries(crm.map((stage) => [stage.name, stage.id])))
     setMetrics({ confirmedRevenue: Number(dashboard.confirmed_revenue), confirmedSales: Number(dashboard.confirmed_sales), openLeads: Number(dashboard.open_leads), averageTicket: Number(dashboard.average_ticket), leadsThisMonth: Number(dashboard.leads_this_month) })
@@ -1239,7 +1309,7 @@ export default function App() {
       </aside>
       <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
-      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
+      {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onOpenChat={selectedLead.phone ? () => { openLeadChat(selectedLead); setSelectedLead(null) } : undefined} onResolveRequest={async (requestId) => { if (!session) throw new Error('Entre no CRM para continuar.'); await api.resolveLeadRequest(session, requestId); setSelectedLead((lead) => lead ? { ...lead, requests: (lead.requests ?? []).filter((request) => request.id !== requestId) } : lead); await loadWorkspace(session) }} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm session={session} onClose={() => setShowLeadForm(false)} onSave={createLead}/>}
       {showSaleForm && selectedLead && <SaleForm lead={selectedLead} onClose={() => setShowSaleForm(false)} onSave={registerSale}/>}
     </div>

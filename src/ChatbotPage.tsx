@@ -5,6 +5,7 @@ import { api, type BotRuleData, type BotSettingsData, type BotSettingsInput, typ
 type Form = {
   active: boolean
   ai: boolean
+  handoff: boolean
   welcome: string
   promotion: string
   promotionInWelcome: boolean
@@ -24,6 +25,7 @@ const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 const toForm = (settings: BotSettingsData): Form => ({
   active: settings.is_active,
   ai: settings.ai_enabled,
+  handoff: settings.handoff_on_fallback ?? false,
   welcome: settings.welcome_message ?? '',
   promotion: settings.promotion_message ?? '',
   promotionInWelcome: settings.promotion_in_welcome ?? false,
@@ -35,7 +37,7 @@ const toForm = (settings: BotSettingsData): Form => ({
   end: settings.business_hours.end,
   mode: settings.bot_mode,
   priceReplies: settings.price_replies_enabled,
-  catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : String(item.price).replace('.', ','), description: item.description ?? '' })),
+  catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : Number(item.price).toFixed(2).replace('.', ','), description: item.description ?? '' })),
 })
 
 const parsePrice = (value: string) => {
@@ -51,7 +53,7 @@ const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabl
   const catalog = form.catalog.filter((item) => item.name.trim() || item.price.trim()).map((item) => {
     if (!item.name.trim()) throw new Error('Dê um nome para cada item da lista de preços.')
     const price = parsePrice(item.price)
-    if (price === null || Number.isNaN(price)) throw new Error(`Informe o valor de "${item.name.trim()}" (exemplo: 40 ou 39,90).`)
+    if (Number.isNaN(price)) throw new Error(`O valor de "${item.name.trim()}" não parece um número (exemplo: 40 ou 39,90). Deixe em branco se não tiver preço fixo.`)
     return { name: item.name.trim(), price, description: item.description.trim() || undefined }
   })
   return {
@@ -80,11 +82,16 @@ const topicTemplates = [
 ]
 
 const sourceLabel: Record<string, string> = {
-  keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
+  schedule: 'Pedido de reunião ou horário: a equipe vê no lead', human: 'Pediu um atendente: o bot para e a equipe vê no lead', keyword: 'Respondeu por um assunto', price: 'Respondeu pela lista de preços', welcome: 'Mensagem de boas-vindas', off_hours: 'Mensagem de fora do horário', fallback: 'Resposta de "não entendi"',
   silent: 'O bot não responderia (confira o dia, o horário e o modo escolhidos)',
 }
 
-const promotionRuleName = 'Promoção atual'
+const silentLabel = {
+  inside_hours: 'Silêncio porque o modo é "só fora do horário" e este horário é de atendimento. Marque "Simular fora do horário" ou escolha "Sempre".',
+  nothing_matched: 'Nenhum assunto nem preço casou com essa frase, e a mensagem de "não entendi" (passo 2) está vazia. Preencha-a para o bot sempre responder algo.',
+}
+
+const promotionRuleName ='Promoção atual'
 const promotionKeywords = 'promoção, promocoes, desconto, oferta, cupom, tem promoção, tem desconto'
 
 function Toggle({ checked, onChange, label, hint }: { checked: boolean; onChange: (value: boolean) => void; label: string; hint?: string }) {
@@ -142,19 +149,48 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
   const [conversation, setConversation] = useState<Array<{ from: 'client' | 'bot'; text: string; note?: string }>>([])
   const [uazapi, setUazapi] = useState({ channelName: 'Comercial', phone: '', serverUrl: '', instance: '', token: '' })
 
-  const load = useCallback(async () => {
+  const draftKey = session ? `otimiza.bot.draft.${session.companyId}` : ''
+
+  // keepForm: recarrega a lista de assuntos sem apagar o que a pessoa já digitou nas outras partes da tela.
+  const load = useCallback(async (options: { keepForm?: boolean } = {}) => {
     if (!session) return
     setError('')
     try {
       const result = await api.chatbot(session)
-      setSaved(result.settings); setForm(toForm(result.settings)); setRules(result.rules); setChannels(result.channels); setAiAvailable(result.aiAvailable)
+      setSaved(result.settings); setRules(result.rules); setChannels(result.channels); setAiAvailable(result.aiAvailable)
+      if (options.keepForm) return
+      const base = toForm(result.settings)
+      let restored: Form | null = null
+      try {
+        const raw = draftKey ? window.localStorage.getItem(draftKey) : null
+        const draft = raw ? JSON.parse(raw) as Partial<Form> : null
+        if (draft && typeof draft.welcome === 'string' && Array.isArray(draft.days) && Array.isArray(draft.catalog) && JSON.stringify({ ...base, ...draft }) !== JSON.stringify(base)) restored = { ...base, ...draft }
+      } catch { /* sem rascunho utilizável: segue com o que está salvo */ }
+      setForm(restored ?? base)
+      if (restored) setNotice('Recuperamos o que você tinha digitado e não salvou. Confira e clique em "Salvar alterações".')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o chatbot.') }
     finally { setLoading(false) }
-  }, [session])
+  }, [session, draftKey])
 
   useEffect(() => { void load() }, [load])
 
   const dirty = useMemo(() => Boolean(saved && form && JSON.stringify(toForm(saved)) !== JSON.stringify(form)), [saved, form])
+
+  // O rascunho fica guardado no navegador enquanto houver alterações não salvas, e some assim que salvar ou descartar.
+  useEffect(() => {
+    if (!draftKey || !form || !saved) return
+    try {
+      if (dirty) window.localStorage.setItem(draftKey, JSON.stringify(form))
+      else window.localStorage.removeItem(draftKey)
+    } catch { /* armazenamento indisponível: o aviso ao sair continua valendo */ }
+  }, [dirty, form, saved, draftKey])
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
   const update = (patch: Partial<Form>) => setForm((current) => current ? { ...current, ...patch } : current)
 
   if (!session) return <section className="empty-page panel"><div className="empty-page__icon"><Bot size={24} /></div><span className="eyebrow">CHATBOT</span><h1>Configure seu atendimento automático.</h1><p>Entre no CRM para conectar seu WhatsApp e ensinar o chatbot a responder seus clientes.</p><button className="primary-button" type="button" onClick={onRequestAccess}>Entrar no CRM <ArrowRight size={16} /></button></section>
@@ -165,20 +201,21 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     setSaving(true); setError(''); setNotice('')
     try {
       const draft = draftFromForm(form)
-      const result = await api.saveChatbotSettings(session, { isActive: form.active, aiEnabled: form.ai, ...draft })
+      const result = await api.saveChatbotSettings(session, { isActive: form.active, aiEnabled: form.ai, handoffOnFallback: form.handoff, ...draft })
       const currentPromotion = rules.find((rule) => rule.name === promotionRuleName)
       if (form.promotion.trim()) {
         const input = { name: promotionRuleName, triggerValue: promotionKeywords, responseText: form.promotion.trim() }
         if (currentPromotion) await api.updateChatbotRule(session, currentPromotion.id, { ...input, isActive: true })
         else await api.createChatbotRule(session, input)
       } else if (currentPromotion?.is_active) await api.updateChatbotRule(session, currentPromotion.id, { isActive: false })
-      setSaved(result); setForm(toForm(result)); await load(); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
+      try { window.localStorage.removeItem(draftKey) } catch { /* ignorar */ }
+      setSaved(result); setForm(toForm(result)); await load({ keepForm: true }); setNotice('Alterações salvas. O chatbot já usa a nova configuração.')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível salvar.') } finally { setSaving(false) }
   }
 
   const runRule = async (work: () => Promise<unknown>, success?: string) => {
     setError(''); setNotice('')
-    try { await work(); await load(); if (success) setNotice(success) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível concluir.') }
+    try { await work(); await load({ keepForm: true }); if (success) setNotice(success) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível concluir.') }
   }
 
   const sendTest = async () => {
@@ -187,7 +224,8 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
     setTesting(true); setError('')
     try {
       const reply = await api.chatbotTest(session, { message, firstMessage: testFirst, at: testOutside ? outsideHoursInstant(form) : undefined, draft: draftFromForm(form) })
-      setConversation((current) => [...current, { from: 'client', text: message }, { from: 'bot', text: reply.reply ?? 'O bot ficaria em silêncio.', note: sourceLabel[reply.source] + (reply.ruleName ? `: ${reply.ruleName}` : '') }])
+      const note = reply.reply === null ? silentLabel[reply.silentReason ?? 'nothing_matched'] : sourceLabel[reply.source] + (reply.ruleName ? `: ${reply.ruleName}` : '')
+      setConversation((current) => [...current, { from: 'client', text: message }, { from: 'bot', text: reply.reply ?? 'O bot ficaria em silêncio.', note }])
       setTestText(''); setTestFirst(false)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível testar.') } finally { setTesting(false) }
   }
@@ -234,6 +272,7 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
           <label>Quando o bot não entender <small>resposta padrão</small>
             <textarea rows={3} value={form.fallback} onChange={(event) => update({ fallback: event.target.value })} placeholder="Não entendi 🤔 Você pode perguntar sobre preços, horários ou endereço. Se preferir, aguarde que um atendente responde." />
           </label>
+          <Toggle checked={form.handoff} onChange={(value) => update({ handoff: value })} label="Quando o bot não entender, passar para um atendente" hint="O bot para de responder nessa conversa e o pedido aparece no lead, para você assumir. Ele volta quando você retomar ou depois de 12 horas." />
         </section>
 
         <section className="panel bot-card bot-card--promotion">
@@ -264,15 +303,15 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
         </section>
 
         <section className="panel bot-card">
-          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar “quanto custa?”, o bot responde com estes valores.</p></div></div>
-          <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
+          <div className="bot-card__head"><span className="bot-step">5</span><div><h2><Tag size={16} /> Seus produtos e preços</h2><p>Cadastre o que você vende. Quando o cliente perguntar por um item, pelos seus serviços ou “quanto custa?”, o bot responde com o nome, o valor e o detalhe. Sem preço fixo? Deixe o valor em branco.</p></div></div>
+          <Toggle checked={form.priceReplies} onChange={(value) => update({ priceReplies: value })} label="Responder sobre produtos e preços automaticamente" hint="Também ajuda a IA a calcular o valor de cada lead" />
           <div className="bot-catalog">
-            {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$)</span><span>Detalhe <small>opcional</small></span><span /></div>}
+            {!!form.catalog.length && <div className="bot-catalog__head"><span>Produto ou serviço</span><span>Valor (R$) <small>opcional</small></span><span>Detalhe <small>opcional</small></span><span /></div>}
             {form.catalog.map((item, index) => (
               <div className="bot-catalog__row" key={index}>
                 <input aria-label="Produto ou serviço" value={item.name} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, name: event.target.value } : row) })} placeholder="Corte de cabelo" />
                 <input aria-label="Valor" inputMode="decimal" value={item.price} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, price: event.target.value } : row) })} placeholder="40,00" />
-                <input aria-label="Detalhe" value={item.description} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, description: event.target.value } : row) })} placeholder="Tesoura ou máquina" />
+                <input aria-label="Detalhe" maxLength={400} value={item.description} onChange={(event) => update({ catalog: form.catalog.map((row, position) => position === index ? { ...row, description: event.target.value } : row) })} placeholder="Tesoura ou máquina" />
                 <button className="bot-icon" type="button" aria-label="Remover item" onClick={() => update({ catalog: form.catalog.filter((_, position) => position !== index) })}><X size={16} /></button>
               </div>
             ))}
