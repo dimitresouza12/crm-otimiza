@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, isWithinBusinessHours, scheduleReplies, splitKeywords, wantsHuman, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, isWithinBusinessHours, periodsOf, scheduleReplies, splitKeywords, wantsHuman, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -179,6 +179,23 @@ test('fora do horário de atendimento usa a mensagem de fechado', () => {
   assert.equal(chooseBotReply({ settings, rules, text: 'oi', isFirstMessage: true, now: sunday })?.source, 'off_hours')
   assert.equal(chooseBotReply({ settings, rules, text: 'blá', isFirstMessage: false, now: night })?.source, 'off_hours')
   assert.equal(chooseBotReply({ settings, rules, text: 'qual o endereço?', isFirstMessage: false, now: night })?.source, 'keyword')
+})
+
+test('expediente com pausa para o almoço: 07h–11h e 13h–17h', () => {
+  const split = { enabled: true, days: [1, 2, 3, 4, 5], start: '07:00', end: '17:00', periods: [{ start: '07:00', end: '11:00' }, { start: '13:00', end: '17:00' }] }
+  // quarta-feira, horário de Brasília (UTC-3)
+  const at = (time: string, day = '2026-10-07') => new Date(`${day}T${String(Number(time.slice(0, 2)) + 3).padStart(2, '0')}:${time.slice(3)}:00Z`)
+  const expected: Array<[string, boolean]> = [['06:59', false], ['07:00', true], ['10:59', true], ['11:00', false], ['12:00', false], ['12:59', false], ['13:00', true], ['16:59', true], ['17:00', false], ['20:00', false]]
+  for (const [time, inside] of expected) assert.equal(isWithinBusinessHours(split, at(time)), inside, time)
+  // fora dos dias marcados continua fechado, mesmo dentro de um período
+  assert.equal(isWithinBusinessHours(split, at('08:00', '2026-10-11')), false)
+  // formato antigo, sem "periods", segue valendo: um período só
+  assert.equal(isWithinBusinessHours({ enabled: true, days: [3], start: '09:00', end: '18:00' }, at('12:00')), true)
+  assert.equal(periodsOf({ enabled: true, days: [3], start: '09:00', end: '18:00' }).length, 1)
+  // o bot usa o horário: no almoço responde a mensagem de fechado
+  const lunch = chooseBotReply({ settings: { ...settings, business_hours: split }, rules, text: 'oi', isFirstMessage: true, now: at('12:00') })
+  assert.equal(lunch?.source, 'off_hours')
+  assert.equal(chooseBotReply({ settings: { ...settings, business_hours: split }, rules, text: 'oi', isFirstMessage: true, now: at('09:00') })?.source, 'welcome')
 })
 
 test('modo "só fora do horário" deixa o bot calado durante o expediente', () => {

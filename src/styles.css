@@ -671,3 +671,8 @@ body:has(.access-page), body:has(.trial-page) { overflow: hidden; }
 .drawer__requests li.request--handoff blockquote { border-left-color: #e08a84; }
 .request__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .request__actions button { flex: 1 1 auto; min-height: 38px; font-size: 12px; }
+
+/* Horário de atendimento com vários períodos (ex.: manhã e tarde, com pausa para o almoço) */
+.bot-periods { display: grid; gap: 10px; }
+.bot-periods .bot-times { align-items: flex-end; }
+.bot-periods__hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

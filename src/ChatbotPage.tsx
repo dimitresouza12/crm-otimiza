@@ -13,8 +13,7 @@ type Form = {
   offHours: string
   hoursEnabled: boolean
   days: number[]
-  start: string
-  end: string
+  periods: Array<{ start: string; end: string }>
   mode: 'always' | 'outside_hours'
   priceReplies: boolean
   catalog: Array<{ name: string; price: string; description: string }>
@@ -33,8 +32,7 @@ const toForm = (settings: BotSettingsData): Form => ({
   offHours: settings.off_hours_message ?? '',
   hoursEnabled: settings.business_hours.enabled,
   days: settings.business_hours.days,
-  start: settings.business_hours.start,
-  end: settings.business_hours.end,
+  periods: settings.business_hours.periods?.length ? settings.business_hours.periods.map((period) => ({ start: period.start, end: period.end })) : [{ start: settings.business_hours.start, end: settings.business_hours.end }],
   mode: settings.bot_mode,
   priceReplies: settings.price_replies_enabled,
   catalog: settings.catalog.map((item) => ({ name: item.name, price: item.price === null ? '' : Number(item.price).toFixed(2).replace('.', ','), description: item.description ?? '' })),
@@ -49,7 +47,13 @@ const parsePrice = (value: string) => {
 
 const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabled'> => {
   if (form.hoursEnabled && !form.days.length) throw new Error('Escolha pelo menos um dia de atendimento.')
-  if (form.hoursEnabled && form.start >= form.end) throw new Error('O horário de início precisa ser antes do horário de término.')
+  if (form.hoursEnabled) {
+    form.periods.forEach((period, index) => {
+      if (!period.start || !period.end) throw new Error('Preencha o início e o fim de cada período de atendimento.')
+      if (period.start >= period.end) throw new Error(index === 0 && form.periods.length === 1 ? 'O horário de início precisa ser antes do horário de término.' : `No período ${index + 1}, o início precisa ser antes do término.`)
+      if (index > 0 && period.start < form.periods[index - 1].end) throw new Error(`O período ${index + 1} começa antes de o período ${index} terminar.`)
+    })
+  }
   const catalog = form.catalog.filter((item) => item.name.trim() || item.price.trim()).map((item) => {
     if (!item.name.trim()) throw new Error('Dê um nome para cada item da lista de preços.')
     const price = parsePrice(item.price)
@@ -58,7 +62,7 @@ const draftFromForm = (form: Form): Omit<BotSettingsInput, 'isActive' | 'aiEnabl
   })
   return {
     welcomeMessage: form.welcome, promotionMessage: form.promotion, promotionInWelcome: form.promotionInWelcome, fallbackMessage: form.fallback, offHoursMessage: form.offHours,
-    businessHours: { enabled: form.hoursEnabled, days: form.days, start: form.start, end: form.end },
+    businessHours: { enabled: form.hoursEnabled, days: form.days, start: form.periods[0].start, end: form.periods[form.periods.length - 1].end, periods: form.periods },
     botMode: form.mode, priceRepliesEnabled: form.priceReplies, catalog,
   }
 }
@@ -68,7 +72,7 @@ const outsideHoursInstant = (form: Form) => {
   for (let offset = 0; offset < 9; offset++) {
     const day = new Date(); day.setUTCDate(day.getUTCDate() + offset); day.setUTCHours(6, 0, 0, 0) // 03:00 em Brasília
     const weekday = new Date(day.getTime() - 3 * 3_600_000).getUTCDay()
-    if (day.getTime() > Date.now() && (!form.days.includes(weekday) || form.start > '03:00' || form.end <= '03:00')) return day.toISOString()
+    if (day.getTime() > Date.now() && (!form.days.includes(weekday) || !form.periods.some((period) => period.start <= '03:00' && period.end > '03:00'))) return day.toISOString()
   }
   return undefined
 }
@@ -290,7 +294,17 @@ export function ChatbotPage({ session, account, onRequestAccess, onOpenIntegrati
           {form.hoursEnabled && (
             <div className="bot-hours">
               <div className="bot-days" role="group" aria-label="Dias de atendimento">{dayNames.map((day, index) => <button key={day} type="button" className={form.days.includes(index) ? 'is-on' : ''} aria-pressed={form.days.includes(index)} onClick={() => update({ days: form.days.includes(index) ? form.days.filter((value) => value !== index) : [...form.days, index].sort() })}>{day}</button>)}</div>
-              <div className="bot-times"><label>Das<input type="time" value={form.start} onChange={(event) => update({ start: event.target.value })} /></label><label>Até<input type="time" value={form.end} onChange={(event) => update({ end: event.target.value })} /></label></div>
+              <div className="bot-periods">
+                {form.periods.map((period, index) => (
+                  <div className="bot-times" key={index}>
+                    <label>{form.periods.length > 1 ? `Período ${index + 1}: das` : 'Das'}<input type="time" value={period.start} onChange={(event) => update({ periods: form.periods.map((item, position) => position === index ? { ...item, start: event.target.value } : item) })} /></label>
+                    <label>Até<input type="time" value={period.end} onChange={(event) => update({ periods: form.periods.map((item, position) => position === index ? { ...item, end: event.target.value } : item) })} /></label>
+                    {form.periods.length > 1 && <button className="bot-icon" type="button" aria-label={`Remover o período ${index + 1}`} onClick={() => update({ periods: form.periods.filter((_, position) => position !== index) })}><X size={16} /></button>}
+                  </div>
+                ))}
+                {form.periods.length < 4 && <button className="bot-add" type="button" onClick={() => { const last = form.periods[form.periods.length - 1]; const [hour, minute] = last.end.split(':').map(Number); const start = `${String(Math.min(hour + 2, 22)).padStart(2, '0')}:${String(minute || 0).padStart(2, '0')}`; update({ periods: [...form.periods, { start, end: `${String(Math.min(Number(start.slice(0, 2)) + 4, 23)).padStart(2, '0')}:${start.slice(3)}` }] }) }}><Plus size={16} /> Adicionar outro período (ex.: depois do almoço)</button>}
+                <p className="bot-periods__hint">{form.periods.length > 1 ? `Atendimento ${form.periods.map((period) => `das ${period.start} às ${period.end}`).join(' e ')}. O que fica entre os períodos conta como fechado.` : 'Tem pausa para o almoço? Adicione outro período: por exemplo, 07:00 às 11:00 e 13:00 às 17:00.'}</p>
+              </div>
               <fieldset className="bot-modes"><legend>Quando o bot responde?</legend>
                 <label><input type="radio" name="bot-mode" checked={form.mode === 'always'} onChange={() => update({ mode: 'always' })} /><span><b>Sempre</b><small>O bot responde dentro e fora do horário.</small></span></label>
                 <label><input type="radio" name="bot-mode" checked={form.mode === 'outside_hours'} onChange={() => update({ mode: 'outside_hours' })} /><span><b>Só fora do horário de atendimento</b><small>Durante o expediente, a sua equipe responde e o bot fica quieto.</small></span></label>

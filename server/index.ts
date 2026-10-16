@@ -1077,8 +1077,16 @@ app.get('/api/chatbot', { preHandler: authenticate }, async (request, reply) => 
 })
 
 const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/)
-const businessHoursSchema = z.object({ enabled: z.boolean(), days: z.array(z.number().int().min(0).max(6)).max(7), start: timeOfDay, end: timeOfDay })
-  .refine((value) => !value.enabled || (value.days.length > 0 && value.start < value.end), { message: 'Escolha os dias e um horário de início anterior ao de término.' })
+const hoursPeriodSchema = z.object({ start: timeOfDay, end: timeOfDay })
+// Expediente quebrado (07:00–11:00 e 13:00–17:00): períodos em ordem, sem se sobrepor. start/end guardam o primeiro início e o último fim.
+const periodsAreValid = (periods: Array<{ start: string; end: string }>) => periods.every((period, index) => period.start < period.end && (index === 0 || period.start >= periods[index - 1].end))
+const businessHoursSchema = z.object({ enabled: z.boolean(), days: z.array(z.number().int().min(0).max(6)).max(7), start: timeOfDay, end: timeOfDay, periods: z.array(hoursPeriodSchema).min(1).max(4).optional() })
+  .refine((value) => !value.enabled || value.days.length > 0, { message: 'Escolha pelo menos um dia de atendimento.' })
+  .refine((value) => !value.enabled || periodsAreValid(value.periods ?? [{ start: value.start, end: value.end }]), { message: 'Confira os horários: cada período precisa começar antes de terminar, e o seguinte só pode começar depois do anterior.' })
+  .transform((value) => {
+    const periods = value.periods ?? [{ start: value.start, end: value.end }]
+    return { ...value, start: periods[0].start, end: periods[periods.length - 1].end, periods }
+  })
 const catalogSchema = z.array(z.object({
   name: z.string().trim().min(1).max(80),
   price: z.coerce.number().min(0).max(10_000_000).nullable(),

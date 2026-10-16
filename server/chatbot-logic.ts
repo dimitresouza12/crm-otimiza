@@ -1,7 +1,9 @@
 import { foldText } from './message-text.js'
 
 export type CatalogItem = { name: string; price: number | null; description?: string }
-export type BusinessHours = { enabled: boolean; days: number[]; start: string; end: string }
+export type HoursPeriod = { start: string; end: string }
+// start/end continuam existindo (primeiro início e último fim) para o formato antigo; "periods" traz o expediente quebrado, como 07-11 e 13-17.
+export type BusinessHours = { enabled: boolean; days: number[]; start: string; end: string; periods?: HoursPeriod[] }
 export type BotSettings = {
   is_active: boolean
   welcome_message: string | null
@@ -25,12 +27,14 @@ const toMinutes = (value: string) => {
   return (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0)
 }
 
+export const periodsOf = (hours: BusinessHours): HoursPeriod[] => hours.periods?.length ? hours.periods : [{ start: hours.start, end: hours.end }]
+
 export const isWithinBusinessHours = (hours: BusinessHours, now = new Date(), timeZone = process.env.BOT_TIMEZONE || 'America/Sao_Paulo') => {
   if (!hours.enabled) return true
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now)
   const weekday = weekdays[parts.find((part) => part.type === 'weekday')?.value ?? ''] ?? 0
   const minutes = Number(parts.find((part) => part.type === 'hour')?.value ?? 0) * 60 + Number(parts.find((part) => part.type === 'minute')?.value ?? 0)
-  return hours.days.includes(weekday) && minutes >= toMinutes(hours.start) && minutes < toMinutes(hours.end)
+  return hours.days.includes(weekday) && periodsOf(hours).some((period) => minutes >= toMinutes(period.start) && minutes < toMinutes(period.end))
 }
 
 export const splitKeywords = (value: string | null) => (value ?? '').split(/[,;\n]/).map(foldText).filter((keyword) => keyword.length >= 2)
