@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react'
-import { AlertCircle, ArrowLeft, Bot, Check, CheckCheck, Download, FileText, MessageCircleMore, Mic, Paperclip, Pause, Play, Reply, Search, Send, Trash2, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Bot, Check, CheckCheck, Download, Eye, FileText, MessageCircleMore, Mic, Paperclip, Pause, Play, Reply, Search, Send, Trash2, X } from 'lucide-react'
 import { api, type ChatMessage, type Session } from './lib/api'
 import { onChatEvent } from './lib/events'
 
@@ -37,12 +37,12 @@ const listTime = (iso: string | null) => {
   const date = new Date(iso)
   return date.toDateString() === new Date().toDateString() ? timeLabel(iso) : date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
 }
-const previewOf = (conversation: ConversationRow) => {
+const previewOf = (conversation: ConversationRow, outboundLabel = 'Você') => {
   const kind = conversation.last_type ? kindOf({ message_type: conversation.last_type }) : 'text'
   const base = kind === 'image' ? '📷 Foto' : kind === 'audio' ? '🎤 Áudio' : kind === 'video' ? '🎬 Vídeo' : kind === 'document' ? '📎 Documento' : kind === 'sticker' ? 'Figurinha' : ''
   const text = conversation.last_message ?? ''
   const body = base ? (text ? `${base} · ${text}` : base) : text || 'Sem mensagens'
-  return `${conversation.last_direction === 'outbound' ? 'Você: ' : ''}${body}`
+  return `${conversation.last_direction === 'outbound' ? `${outboundLabel}: ` : ''}${body}`
 }
 const toBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader()
@@ -102,9 +102,10 @@ function MessageMedia({ session, message, kind, onOpenImage }: { session: Sessio
   return <a className="chat-file" href={url} download={message.media_name ?? 'arquivo'}><FileText size={20} /><span>{message.media_name ?? 'Arquivo'}</span><Download size={16} /></a>
 }
 
-type ThreadProps = { session: Session; conversation: ConversationRow; botEnabled: boolean; onBack?: () => void; onClose?: () => void; onActivity?: () => void }
+// readOnly: equipe da Otimiza lendo a conversa com autorização do cliente. Não envia, não responde e não marca como lida.
+type ThreadProps = { session: Session; conversation: ConversationRow; botEnabled: boolean; readOnly?: boolean; onBack?: () => void; onClose?: () => void; onActivity?: () => void }
 
-export function ChatThread({ session, conversation, botEnabled, onBack, onClose, onActivity }: ThreadProps) {
+export function ChatThread({ session, conversation, botEnabled, readOnly = false, onBack, onClose, onActivity }: ThreadProps) {
   const activeId = conversation.id
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [threadLoading, setThreadLoading] = useState(true)
@@ -134,14 +135,14 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
       setMessages(result.messages)
       setBotPaused(result.botPaused)
       const lastInbound = result.messages.filter((message) => message.direction === 'inbound').at(-1)?.sent_at ?? null
-      if (lastInbound && lastInbound !== markedRead.current && document.visibilityState === 'visible') {
+      if (!readOnly && lastInbound && lastInbound !== markedRead.current && document.visibilityState === 'visible') {
         markedRead.current = lastInbound
         void api.markConversationRead(session, activeId).then(() => onActivity?.()).catch(() => { markedRead.current = null })
       }
       setError('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível carregar a conversa.') }
     finally { setThreadLoading(false) }
-  }, [activeId, session, onActivity])
+  }, [activeId, session, onActivity, readOnly])
 
   useEffect(() => {
     void load()
@@ -277,7 +278,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
             <div key={message.id} className="chat-row">
               {newDay && <div className="chat-day"><span>{dayLabel(message.sent_at)}</span></div>}
               <div className={`chat-msg ${outbound ? 'chat-msg--out' : 'chat-msg--in'} chat-msg--${author}`}>
-                <button className="chat-msg__reply" type="button" aria-label="Responder esta mensagem" title="Responder" onClick={() => { setReplyTo(message); textArea.current?.focus() }}><Reply size={13} /></button>
+                {!readOnly && <button className="chat-msg__reply" type="button" aria-label="Responder esta mensagem" title="Responder" onClick={() => { setReplyTo(message); textArea.current?.focus() }}><Reply size={13} /></button>}
                 {author === 'bot' && <span className="chat-msg__who"><Bot size={11} /> Chatbot</span>}
                 {author === 'phone' && <span className="chat-msg__who">Pelo celular</span>}
                 {author === 'agent' && <span className="chat-msg__who chat-msg__who--agent">Atendente</span>}
@@ -300,7 +301,9 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
         </div>
       )}
       {replyTo && <div className="chat-replying"><Reply size={15} /><span><b>Respondendo a {replyTo.direction === 'inbound' ? 'cliente' : 'você'}</b>{replyTo.body || (replyTo.message_type.includes('image') ? '📷 Foto' : replyTo.message_type.includes('audio') ? '🎤 Áudio' : replyTo.message_type.includes('video') ? '🎬 Vídeo' : replyTo.message_type.includes('document') ? '📎 Documento' : 'Mensagem')}</span><button type="button" aria-label="Cancelar resposta" onClick={() => setReplyTo(null)}><X size={15} /></button></div>}
-      {recording ? (
+      {readOnly ? (
+        <div className="chat-readonly"><Eye size={15} /> Somente leitura. O cliente autorizou a equipe da Otimiza a acompanhar esta conversa para analisar o desempenho do tráfego.</div>
+      ) : recording ? (
         <div className="chat-composer chat-composer--recording">
           <button type="button" className="chat-icon-button" aria-label="Cancelar gravação" onClick={() => stopRecording(false)}><Trash2 size={19} /></button>
           <span className="chat-rec"><i /> Gravando {clock}</span>
@@ -321,7 +324,7 @@ export function ChatThread({ session, conversation, botEnabled, onBack, onClose,
   )
 }
 
-export function ChatPage({ session, initial, botEnabled }: { session: Session; initial: ConversationRow[]; botEnabled: boolean }) {
+export function ChatPage({ session, initial, botEnabled, readOnly = false }: { session: Session; initial: ConversationRow[]; botEnabled: boolean; readOnly?: boolean }) {
   const [list, setList] = useState<ConversationRow[]>(initial)
   const [listLoaded, setListLoaded] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -361,8 +364,8 @@ export function ChatPage({ session, initial, botEnabled }: { session: Session; i
               return (
                 <button type="button" key={item.id} className={`chat-item ${item.id === activeId ? 'is-active' : ''} ${item.unread_count ? 'has-unread' : ''}`} onClick={() => { setActiveId(item.id); setMobileThread(true); setList((current) => current.map((row) => row.id === item.id ? { ...row, unread_count: 0 } : row)) }}>
                   <span className="avatar">{initialsOf(name)}</span>
-                  <span className="chat-item__main"><b>{name}</b><small>{item.last_sent_by === 'bot' && <Bot size={12} />}{previewOf(item)}</small></span>
-                  <span className="chat-item__meta"><time>{listTime(item.last_message_at ?? item.sent_at)}</time>{item.unread_count ? <em className="chat-unread" aria-label={`${item.unread_count} não lidas`}>{item.unread_count > 99 ? '99+' : item.unread_count}</em> : botEnabled && item.bot_paused ? <i title="Chatbot pausado"><Pause size={10} /></i> : null}</span>
+                  <span className="chat-item__main"><b>{name}</b><small>{item.last_sent_by === 'bot' && <Bot size={12} />}{previewOf(item, readOnly ? 'Empresa' : 'Você')}</small></span>
+                  <span className="chat-item__meta"><time>{listTime(item.last_message_at ?? item.sent_at)}</time>{item.unread_count && !readOnly ? <em className="chat-unread" aria-label={`${item.unread_count} não lidas`}>{item.unread_count > 99 ? '99+' : item.unread_count}</em> : botEnabled && item.bot_paused ? <i title="Chatbot pausado"><Pause size={10} /></i> : null}</span>
                 </button>
               )
             })}
@@ -370,7 +373,7 @@ export function ChatPage({ session, initial, botEnabled }: { session: Session; i
           </div>
         </aside>
         {active
-          ? <ChatThread key={active.id} session={session} conversation={active} botEnabled={botEnabled} onBack={() => setMobileThread(false)} onActivity={() => { void refreshList().catch(() => undefined) }} />
+          ? <ChatThread key={active.id} session={session} conversation={active} botEnabled={botEnabled && !readOnly} readOnly={readOnly} onBack={() => setMobileThread(false)} onActivity={() => { void refreshList().catch(() => undefined) }} />
           : <div className="chat-thread"><div className="chat-placeholder"><MessageCircleMore size={34} /><h2>Selecione uma conversa</h2><p>Escolha um atendimento na lista para ver as mensagens e responder.</p></div></div>}
       </section>
     </>

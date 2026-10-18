@@ -13,12 +13,14 @@
     "db:backup": "sh scripts/backup.sh",
     "account:activate": "node scripts/activate-account.mjs",
     "account:reset-password": "node scripts/reset-password.mjs",
+    "account:set-admin": "node scripts/set-platform-role.mjs",
     "account:set-plan": "tsx scripts/set-plan.ts",
     "test:evolution": "node --import tsx --test server/evolution.test.ts server/message-text.test.ts",
     "test:plans": "node --import tsx --test server/pricing.test.ts",
     "test:ai": "node --import tsx --test server/lead-ai.test.ts server/openai.test.ts",
     "test:bot": "node --import tsx --test server/chatbot-logic.test.ts",
-    "test:billing": "node --import tsx --test server/asaas.test.ts server/card-checkout.test.ts server/document.test.ts"
+    "test:billing": "node --import tsx --test server/asaas.test.ts server/card-checkout.test.ts server/document.test.ts",
+    "test:admin": "node --import tsx --test server/platform-admin.test.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

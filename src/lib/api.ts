@@ -68,7 +68,7 @@ export const api = {
   register: (input: { name: string; companyName: string; email: string; password: string; segment?: string; objective?: string; usesOtimizaAutomation?: boolean; plan?: 'crm' | 'chatbot'; channelLimit?: number }) =>
     request<Session & { trialEndsAt: string }>('/api/auth/register', { method: 'POST', body: JSON.stringify(input) }),
   login: (email: string, password: string) => request<Session>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  me: (session: Session) => request<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: 'trial' | 'active' | 'expired'; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired' }>('/api/me', {}, session),
+  me: (session: Session) => request<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: 'trial' | 'active' | 'expired'; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; platform_role: PlatformRole | null; traffic_access_granted_at: string | null }>('/api/me', {}, session),
   dashboard: (session: Session) => request<{ confirmed_revenue: string; confirmed_sales: string; open_leads: string; average_ticket: string; leads_this_month: string }>('/api/dashboard', {}, session),
   crm: (session: Session) => request<Array<{ id: string; name: string; opportunities: Array<{ id: string; title: string; contactName: string | null; phone: string | null; temperature: 'new' | 'warm' | 'hot'; value: string | null; source: string | null; createdAt: string; lastActivityAt: string | null; requests: LeadRequestData[] }> }>>('/api/crm', {}, session),
   resolveLeadRequest: (session: Session, requestId: string) => request<{ id: string; status: 'done' }>(`/api/lead-requests/${requestId}/resolve`, { method: 'POST' }, session),
@@ -112,4 +112,28 @@ export const api = {
   billingCurrent: (session: Session) => request<BillingCurrent>('/api/billing/current', {}, session),
   billingCheckout: (session: Session, input: { method: BillingMethod; holder: BillingHolderInput; card?: BillingCardInput }) => request<BillingCheckoutResult>('/api/billing/checkout', { method: 'POST', body: JSON.stringify(input) }, session),
   updateBillingCard: (session: Session, input: { holder: BillingHolderInput; card: BillingCardInput }) => request<{ ok: true; cardBrand: string | null; cardLast4: string | null }>('/api/billing/card', { method: 'PUT', body: JSON.stringify(input) }, session),
+  setTrafficAccess: (session: Session, granted: boolean) => request<{ trafficAccessGrantedAt: string | null }>('/api/settings/traffic-access', { method: 'PUT', body: JSON.stringify({ granted }) }, session),
+  adminSubscriptions: (session: Session) => request<AdminSubscriptions>('/api/admin/subscriptions', {}, session),
+  adminPayments: (session: Session, companyId: string) => request<AdminPayment[]>(`/api/admin/companies/${companyId}/payments`, {}, session),
+  adminCancel: (session: Session, companyId: string, reason: string) => request<AdminSubscription>(`/api/admin/companies/${companyId}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }, session),
+  adminCompanies: (session: Session) => request<AdminCompany[]>('/api/admin/companies', {}, session),
+  adminTraffic: (session: Session, days: number) => request<{ days: number; items: AdminTrafficRow[] }>(`/api/admin/traffic?days=${days}`, {}, session),
+  adminAudit: (session: Session) => request<AdminAuditRow[]>('/api/admin/audit', {}, session),
 }
+
+export type PlatformRole = 'master' | 'traffic'
+export type AdminSubscription = {
+  companyId: string; company: string; ownerName: string | null; ownerEmail: string | null; plan: string; channelLimit: number; priceCents: number
+  state: 'trial' | 'trial_expired' | 'active' | 'overdue' | 'canceled'; cycle: 'trial' | 'monthly' | 'annual'; monthlyCents: number; annualCents: number | null
+  trialEndsAt: string | null; trialDaysLeft: number | null; billingType: string | null; autoRenew: boolean; nextDueDate: string | null
+  card: { brand: string | null; last4: string } | null; lastPayment: { valueCents: number | null; status: string; paidAt: string | null; dueDate: string | null } | null
+  totalPaidCents: number; canCancel: boolean; createdAt: string
+}
+export type AdminSubscriptions = {
+  totals: { companies: number; trial: number; trialExpired: number; active: number; overdue: number; canceled: number; annual: number; monthlyRecurringCents: number; totalPaidCents: number }
+  items: AdminSubscription[]
+}
+export type AdminPayment = { id: string; billing_type: string | null; value_cents: number; status: string; due_date: string | null; paid_at: string | null; invoice_url: string | null }
+export type AdminCompany = { id: string; name: string; plan: string; created_at: string; conversations_authorized: boolean; traffic_access_granted_at: string | null; owner_name: string | null; bot_active: boolean; connected_channels: number; bot_rules: number }
+export type AdminTrafficRow = { id: string; name: string; conversations_authorized: boolean; spend: number; reported_leads: number; campaigns: number; crm_leads: number; confirmed_sales: number; revenue: number }
+export type AdminAuditRow = { id: string; action: string; detail: Record<string, unknown>; created_at: string; user_name: string; company_name: string | null }

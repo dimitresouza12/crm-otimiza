@@ -25,6 +25,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Mail,
+  Megaphone,
   Menu,
   MessageCircleMore,
   MoreHorizontal,
@@ -37,6 +38,7 @@ import {
   Target,
   TrendingUp,
   UsersRound,
+  Wallet,
   X,
 } from 'lucide-react'
 import otimizaSymbol from './assets/otimiza-ai-symbol.svg'
@@ -44,9 +46,10 @@ import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 import { BillingCheckout } from './BillingCheckout'
+import { AdminChatbotPage, AdminSubscriptionsPage, AdminTrafficPage, TrafficAccessCard } from './AdminPanel'
 import { connectEvents, onChatEvent } from './lib/events'
 
-type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes'
+type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes' | 'admin_assinaturas' | 'admin_chatbot' | 'admin_trafego'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
 type Channel = 'Todos os canais' | 'Comercial' | 'Unidade Aldeota' | 'Pós-venda'
 
@@ -209,6 +212,15 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard; badge?:
 ]
 
 const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot', icon: Bot }
+
+// Painel da equipe da Otimiza: o servidor confere o papel de novo em cada chamada, o menu só esconde o que a pessoa não usa.
+const adminNavFor = (role: 'master' | 'traffic' | null | undefined): typeof navItems => {
+  if (!role) return []
+  const items: typeof navItems = []
+  if (role === 'master') items.push({ id: 'admin_assinaturas', label: 'Assinaturas', icon: Wallet })
+  items.push({ id: 'admin_chatbot', label: 'Chatbot dos clientes', icon: Bot }, { id: 'admin_trafego', label: 'Gestão de tráfego', icon: Megaphone })
+  return items
+}
 
 function MetricCard({ title, value, trend, emphasis, tone, onOpen }: { title: string; value: string; trend: string; emphasis?: boolean; tone?: 'revenue' | 'pipeline' | 'leads' | 'ticket'; onOpen?: () => void }) {
   const interactive = onOpen ? {
@@ -704,7 +716,7 @@ function NotificationsPanel({ notifications, onClose, onNavigate }: { notificati
   return <section className="notifications-panel" aria-label="Notificações"><header><span><Bell size={16}/> Notificações</span><button type="button" onClick={onClose}><X size={16}/></button></header>{notifications.length ? notifications.map((item) => <article key={item.id}><b>{item.title}</b><p>{item.body}</p><button type="button" onClick={() => { onNavigate(target[item.type]); onClose() }}>{item.action}</button></article>) : <div className="empty-list"><CheckCircle2 size={19}/><p>Você está em dia.</p></div>}</section>
 }
 
-function Integrations({ session, account, onRequestAccess, onOpenChatbot }: { session: Session | null; account: { plan: string; uses_automation: boolean } | null; onRequestAccess: () => void; onOpenChatbot: () => void }) {
+function Integrations({ session, account, onRequestAccess, onOpenChatbot, onTrafficAccessChange }: { session: Session | null; account: { plan: string; uses_automation: boolean; role: string; traffic_access_granted_at: string | null } | null; onRequestAccess: () => void; onOpenChatbot: () => void; onTrafficAccessChange: (grantedAt: string | null) => void }) {
   const [provider, setProvider] = useState<'evolution' | 'uazapi'>('evolution')
   const chatbotEnabled = account?.plan === 'chatbot'
   const detail = provider === 'evolution'
@@ -719,6 +731,7 @@ function Integrations({ session, account, onRequestAccess, onOpenChatbot }: { se
       {provider === 'evolution' ? <EvolutionConnectionPanel session={session} onRequestAccess={onRequestAccess} /> : <div className="connection-started"><CheckCircle2 size={19}/><div><b>{chatbotEnabled ? 'Seu Chatbot está disponível' : 'Disponível quando sua empresa precisar'}</b><p>{chatbotEnabled ? 'Abra a aba Chatbot para conectar a instância e configurar as regras do seu número.' : 'A equipe Otimiza AI orienta a configuração depois do diagnóstico comercial.'}</p></div></div>}
       {provider === 'uazapi' && chatbotEnabled && <button className="primary-button" type="button" onClick={onOpenChatbot}>Abrir Chatbot <ArrowRight size={16}/></button>}<small className="connection-note">{provider === 'evolution' ? 'O QR Code conecta o número à sua empresa e as novas mensagens passam a alimentar o CRM.' : 'A UAZAPI só é usada para Chatbot ou Automação. Nenhuma integração com Meta é necessária nesta fase.'}</small>
     </article></section>
+    {session && account?.role === 'owner' && <TrafficAccessCard session={session} grantedAt={account.traffic_access_granted_at} onChange={onTrafficAccessChange}/>}
   </>
 }
 
@@ -1063,7 +1076,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => {
     try { const raw = localStorage.getItem('otimiza-crm-session'); return raw ? JSON.parse(raw) as Session : null } catch { return null }
   })
-  const [account, setAccount] = useState<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null } | null>(null)
+  const [account, setAccount] = useState<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; trial_ends_at: string | null; platform_role: 'master' | 'traffic' | null; traffic_access_granted_at: string | null } | null>(null)
   const [metrics, setMetrics] = useState<{ confirmedRevenue: number; confirmedSales: number; openLeads: number; averageTicket: number; leadsThisMonth: number } | undefined>()
   const [sales, setSales] = useState<SaleRow[]>([])
   const [conversations, setConversations] = useState<ConversationRow[]>([])
@@ -1283,7 +1296,10 @@ export default function App() {
     if (page === 'conversas') return session ? <ChatPage session={session} initial={conversations} botEnabled={account?.plan === 'chatbot'} /> : <ConversationsPage conversations={conversations}/>
     if (page === 'vendas') return <SalesPage sales={sales} session={session!} onRefresh={() => loadWorkspace(session!)}/>
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
-    if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} />
+    if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} onTrafficAccessChange={(value) => setAccount((current) => current && { ...current, traffic_access_granted_at: value })} />
+    if (page === 'admin_assinaturas' && account?.platform_role === 'master') return <AdminSubscriptionsPage session={session!}/>
+    if (page === 'admin_chatbot' && account?.platform_role) return <AdminChatbotPage session={session!}/>
+    if (page === 'admin_trafego' && account?.platform_role) return <AdminTrafficPage session={session!} renderCampaigns={(scoped) => <TrafficPage session={scoped}/>}/>
     if (page === 'trafego') return <TrafficPage session={session!}/>
     return <ReportsPage session={session!}/>
   }
@@ -1292,6 +1308,7 @@ export default function App() {
   const workspaceNavItems = account?.plan === 'chatbot'
     ? [...navItems.slice(0, 4), chatbotNavItem, ...navItems.slice(4)]
     : navItems
+  const adminNavItems = adminNavFor(account?.platform_role)
   if (!session && route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
   if (!session) return <AccessPage initialMode={route === 'signup' ? 'register' : 'login'} selection={selection} onAuthenticated={authenticateSession} onNavigate={navigate}/>
   if (route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
@@ -1305,9 +1322,10 @@ export default function App() {
         <div className="brand"><div className="brand-mark"><img src={otimizaSymbol} alt="Otimiza AI" /></div><div className="brand-name"><span>otimiza <b>AI</b></span><em>CRM</em></div></div>
         <button className="workspace-switcher" type="button"><span className="workspace-initial">{initialsFor(account.company_name)}</span><span><b>{account.company_name}</b><small>{account.access_state === 'trial' ? 'Teste gratuito' : `Plano ${account.plan}`}</small></span><ChevronDown size={16}/></button>
         <nav className="navigation" aria-label="Navegação principal">{workspaceNavItems.map(({ id, label, icon: Icon, badge: fixedBadge }) => { const badge = id === 'conversas' ? (unreadTotal ? (unreadTotal > 99 ? '99+' : String(unreadTotal)) : undefined) : fixedBadge; return <button key={id} className={page === id ? 'is-active' : ''} type="button" onClick={() => { setPage(id); setMobileMenuOpen(false) }}><Icon size={19}/><span>{label}</span>{badge && <b>{badge}</b>}</button> })}</nav>
+        {adminNavItems.length > 0 && <nav className="navigation navigation--admin" aria-label="Equipe Otimiza"><p className="navigation__title"><ShieldCheck size={13}/><span>EQUIPE OTIMIZA</span></p>{adminNavItems.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); setMobileMenuOpen(false) }}><Icon size={19}/><span>{label}</span></button>)}</nav>}
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => { setPage(account.plan === 'chatbot' ? 'chatbot' : 'configuracoes'); setMobileMenuOpen(false) }}><span className="bot-orb"><Bot size={17}/></span><span><b>{account.plan === 'chatbot' ? 'Configurar chatbot' : 'Conectar WhatsApp'}</b><small>{account.plan === 'chatbot' ? 'Respostas por número' : 'Gerenciar integrações'}</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => { setPage('configuracoes'); setMobileMenuOpen(false) }}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account.name)}/><span><b>{account.name}</b><small>{account.role === 'owner' ? 'Administrador' : account.role}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : workspaceNavItems.find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : [...workspaceNavItems, ...adminNavItems].find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
       {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onOpenChat={selectedLead.phone ? () => { openLeadChat(selectedLead); setSelectedLead(null) } : undefined} onResolveRequest={async (requestId) => { if (!session) throw new Error('Entre no CRM para continuar.'); await api.resolveLeadRequest(session, requestId); setSelectedLead((lead) => lead ? { ...lead, requests: (lead.requests ?? []).filter((request) => request.id !== requestId) } : lead); await loadWorkspace(session) }} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm session={session} onClose={() => setShowLeadForm(false)} onSave={createLead}/>}

@@ -21,6 +21,7 @@ import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
 import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
+import { cycleOf, daysLeft, isPlatformRole, monthlyEquivalentCents, platformAccess, stateOf, type PlatformRole } from './platform-admin.js'
 import {
   asaasBillingType,
   asaasConfigured,
@@ -107,6 +108,41 @@ const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
 
 const currentToken = (request: FastifyRequest) => request.user as Token
 
+const platformRoleOf = async (userId: string) => {
+  const { rows } = await query<{ platform_role: string | null }>('SELECT platform_role FROM users WHERE id = $1', [userId])
+  return isPlatformRole(rows[0]?.platform_role) ? rows[0].platform_role : null
+}
+
+// Equipe da Otimiza entra na conta de um cliente sem ser membro, só nas rotas liberadas em platformAccess.
+// O papel vem do banco, nunca do token; cada ação de escrita ou leitura de conversa vai para a trilha de auditoria.
+const platformScope = async (request: FastifyRequest, reply: FastifyReply, companyId: string) => {
+  const token = currentToken(request)
+  const role = await platformRoleOf(token.userId)
+  if (!role || !z.string().uuid().safeParse(companyId).success) return null
+  const company = await query<{ traffic_access_granted_at: string | null }>('SELECT traffic_access_granted_at FROM companies WHERE id = $1', [companyId])
+  if (!company.rows[0]) return null
+  const path = request.url.split('?')[0]
+  const access = platformAccess(request.method, path, company.rows[0].traffic_access_granted_at !== null)
+  if (!access.allowed) {
+    reply.code(403).send(access.needsConsent
+      ? { error: 'O cliente ainda não autorizou o acesso às conversas.', code: 'CONSENT_REQUIRED' }
+      : { error: 'Esta área não está disponível para a equipe da Otimiza.' })
+    return null
+  }
+  if (access.audit) await auditPlatform(token.userId, companyId, `${request.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`)
+  return { companyId, role: 'otimiza_admin', userId: token.userId, accessState: 'active' as const, trialEndsAt: null, platformRole: role }
+}
+
+// Uma linha por ação a cada 5 minutos, para a leitura de uma conversa não gerar centenas de registros.
+const auditPlatform = async (userId: string, companyId: string | null, action: string, detail: Record<string, unknown> = {}) => {
+  await query(
+    `INSERT INTO admin_audit_log (user_id, company_id, action, detail)
+     SELECT $1, $2, $3, $4::jsonb
+     WHERE NOT EXISTS (SELECT 1 FROM admin_audit_log WHERE user_id = $1 AND company_id IS NOT DISTINCT FROM $2 AND action = $3 AND created_at > now() - interval '5 minutes')`,
+    [userId, companyId, action, JSON.stringify(detail)],
+  )
+}
+
 const companyScope = async (request: FastifyRequest, reply: FastifyReply, allowExpired = false) => {
   const token = currentToken(request)
   const requestedCompanyId = (request.headers['x-company-id'] as string | undefined) ?? token.companyId
@@ -117,6 +153,9 @@ const companyScope = async (request: FastifyRequest, reply: FastifyReply, allowE
     [requestedCompanyId, token.userId],
   )
   if (!rows[0]) {
+    const platform = await platformScope(request, reply, requestedCompanyId)
+    if (platform) return platform
+    if (reply.sent) return null
     reply.code(403).send({ error: 'Você não tem acesso a esta empresa.' })
     return null
   }
@@ -208,12 +247,189 @@ app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 mi
 app.get('/api/me', { preHandler: authenticate }, async (request, reply) => {
   const scope = await companyScope(request, reply, true)
   if (!scope) return
-  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: string; uses_automation: boolean }>(
-    `SELECT u.name, u.email, c.name AS company_name, c.plan, c.channel_limit, c.plan_price_cents, c.trial_ends_at, c.billing_status,
+  const { rows } = await query<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: string; uses_automation: boolean; platform_role: string | null; traffic_access_granted_at: string | null }>(
+    `SELECT u.name, u.email, u.platform_role, c.name AS company_name, c.plan, c.channel_limit, c.plan_price_cents, c.trial_ends_at, c.billing_status, c.traffic_access_granted_at,
        COALESCE((c.onboarding ->> 'usesOtimizaAutomation')::boolean, false) AS uses_automation
      FROM users u JOIN companies c ON c.id = $1 WHERE u.id = $2`, [scope.companyId, scope.userId],
   )
   return { ...rows[0], role: scope.role, companyId: scope.companyId, access_state: scope.accessState }
+})
+
+// O titular decide se a equipe de tráfego da Otimiza pode ler as conversas da conta (somente leitura).
+app.put('/api/settings/traffic-access', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await companyScope(request, reply, true)
+  if (!scope) return
+  if (scope.role !== 'owner') return reply.code(403).send({ error: 'Só o titular da conta pode alterar esta autorização.' })
+  const parsed = z.object({ granted: z.boolean() }).safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Informe se o acesso está autorizado.' })
+  const { rows } = await query<{ traffic_access_granted_at: string | null }>(
+    `UPDATE companies SET traffic_access_granted_at = CASE WHEN $2::boolean THEN COALESCE(traffic_access_granted_at, now()) ELSE NULL END, updated_at = now()
+     WHERE id = $1 RETURNING traffic_access_granted_at`, [scope.companyId, parsed.data.granted],
+  )
+  return { trafficAccessGrantedAt: rows[0]?.traffic_access_granted_at ?? null }
+})
+
+// ───────── Painel master (equipe da Otimiza) ─────────
+const adminScope = async (request: FastifyRequest, reply: FastifyReply, allowed: PlatformRole[]) => {
+  const userId = currentToken(request).userId
+  const role = await platformRoleOf(userId)
+  if (!role || !allowed.includes(role)) {
+    reply.code(403).send({ error: 'Acesso restrito à equipe da Otimiza.' })
+    return null
+  }
+  return { userId, role }
+}
+
+const PAID_STATUSES = `'RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'`
+type SubscriptionRow = {
+  id: string; name: string; plan: string; channel_limit: number; plan_price_cents: number; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null; created_at: string
+  owner_name: string | null; owner_email: string | null; sub_status: string | null; billing_type: string | null; cycle: string | null; auto_renew: boolean | null; next_due_date: string | null
+  card_brand: string | null; card_last4: string | null; asaas_subscription_id: string | null
+  last_value_cents: number | null; last_payment_status: string | null; last_paid_at: string | null; last_due_date: string | null; largest_paid_cents: number | null; total_paid_cents: string | null
+}
+
+const subscriptionRows = (companyId?: string) => query<SubscriptionRow>(
+  `SELECT c.id, c.name, c.plan, c.channel_limit, c.plan_price_cents, c.billing_status, c.trial_ends_at, c.created_at,
+     o.name AS owner_name, o.email AS owner_email,
+     bs.status AS sub_status, bs.billing_type, bs.cycle, bs.auto_renew, bs.next_due_date, bs.card_brand, bs.card_last4, bs.asaas_subscription_id,
+     lp.value_cents AS last_value_cents, lp.status AS last_payment_status, lp.paid_at AS last_paid_at, lp.due_date AS last_due_date,
+     pm.largest_paid_cents, pm.total_paid_cents::text
+   FROM companies c
+   LEFT JOIN LATERAL (SELECT u.name, u.email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.company_id = c.id AND m.role = 'owner' ORDER BY m.created_at LIMIT 1) o ON true
+   LEFT JOIN billing_subscriptions bs ON bs.company_id = c.id
+   LEFT JOIN LATERAL (SELECT value_cents, status, paid_at, due_date FROM billing_payments WHERE company_id = c.id ORDER BY COALESCE(paid_at, due_date::timestamptz) DESC NULLS LAST, created_at DESC LIMIT 1) lp ON true
+   LEFT JOIN LATERAL (SELECT max(value_cents) AS largest_paid_cents, sum(value_cents) AS total_paid_cents FROM billing_payments WHERE company_id = c.id AND status IN (${PAID_STATUSES})) pm ON true
+   WHERE ($1::uuid IS NULL OR c.id = $1)
+     AND NOT EXISTS (SELECT 1 FROM memberships mm JOIN users uu ON uu.id = mm.user_id WHERE mm.company_id = c.id AND uu.platform_role IS NOT NULL)
+   ORDER BY c.created_at DESC`, [companyId ?? null],
+)
+
+const subscriptionView = (row: SubscriptionRow) => {
+  const facts = { billingStatus: row.billing_status, trialEndsAt: row.trial_ends_at, subscriptionStatus: row.sub_status, cycle: row.cycle, planPriceCents: row.plan_price_cents, largestPaidCents: row.largest_paid_cents, lastPaymentStatus: row.last_payment_status }
+  return {
+    companyId: row.id, company: row.name, ownerName: row.owner_name, ownerEmail: row.owner_email,
+    plan: row.plan, channelLimit: row.channel_limit, priceCents: row.plan_price_cents,
+    state: stateOf(facts), cycle: cycleOf(facts), monthlyCents: monthlyEquivalentCents(facts),
+    annualCents: cycleOf(facts) === 'annual' ? row.largest_paid_cents : null,
+    trialEndsAt: row.trial_ends_at, trialDaysLeft: row.billing_status === 'trial' ? daysLeft(row.trial_ends_at) : null,
+    billingType: row.billing_type, autoRenew: row.auto_renew ?? false, nextDueDate: row.next_due_date,
+    card: row.card_last4 ? { brand: row.card_brand, last4: row.card_last4 } : null,
+    lastPayment: row.last_payment_status ? { valueCents: row.last_value_cents, status: row.last_payment_status, paidAt: row.last_paid_at, dueDate: row.last_due_date } : null,
+    totalPaidCents: Number(row.total_paid_cents ?? 0), canCancel: row.sub_status !== 'canceled' && (row.billing_status === 'active' || row.sub_status !== null),
+    createdAt: row.created_at,
+  }
+}
+
+app.get('/api/admin/me', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master', 'traffic'])
+  if (!scope) return
+  return { platformRole: scope.role }
+})
+
+app.get('/api/admin/subscriptions', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const items = (await subscriptionRows()).rows.map(subscriptionView)
+  const count = (state: string) => items.filter((item) => item.state === state).length
+  const recurring = items.reduce((sum, item) => sum + item.monthlyCents, 0)
+  return {
+    totals: {
+      companies: items.length, trial: count('trial'), trialExpired: count('trial_expired'), active: count('active'), overdue: count('overdue'), canceled: count('canceled'),
+      annual: items.filter((item) => item.cycle === 'annual' && (item.state === 'active' || item.state === 'overdue')).length,
+      monthlyRecurringCents: recurring, totalPaidCents: items.reduce((sum, item) => sum + item.totalPaidCents, 0),
+    },
+    items,
+  }
+})
+
+app.get('/api/admin/companies/:companyId/payments', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const params = z.object({ companyId: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Empresa inválida.' })
+  const { rows } = await query(
+    `SELECT asaas_payment_id AS id, billing_type, value_cents, status, due_date, paid_at, invoice_url
+     FROM billing_payments WHERE company_id = $1 ORDER BY COALESCE(paid_at, due_date::timestamptz) DESC NULLS LAST, created_at DESC LIMIT 60`, [params.data.companyId],
+  )
+  return rows
+})
+
+// Cancela a assinatura no Asaas e encerra o acesso da empresa. A confirmação fica por conta da tela.
+app.post('/api/admin/companies/:companyId/cancel', { preHandler: authenticate, config: { rateLimit: { max: 20, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ companyId: z.string().uuid() }).safeParse(request.params)
+  const body = z.object({ reason: z.string().trim().max(300).optional() }).safeParse(request.body ?? {})
+  if (!params.success || !body.success) return reply.code(400).send({ error: 'Confira os dados do cancelamento.' })
+  const current = (await subscriptionRows(params.data.companyId)).rows[0]
+  if (!current) return reply.code(404).send({ error: 'Empresa não encontrada.' })
+  if (current.sub_status === 'canceled') return reply.code(409).send({ error: 'Esta assinatura já está cancelada.' })
+  if (current.asaas_subscription_id) {
+    try { await cancelSubscription(current.asaas_subscription_id) } catch (error) {
+      if (error instanceof AsaasError) return reply.code(error.status >= 500 ? 502 : 400).send({ error: `O Asaas não cancelou a assinatura: ${error.message}` })
+      throw error
+    }
+  }
+  await transaction(async (client) => {
+    await client.query(
+      `INSERT INTO billing_subscriptions (company_id, plan, channel_limit, price_cents, status, auto_renew)
+       VALUES ($1, $2, $3, $4, 'canceled', false)
+       ON CONFLICT (company_id) DO UPDATE SET status = 'canceled', auto_renew = false, last_event_at = now(), updated_at = now()`,
+      [current.id, current.plan, current.channel_limit, current.plan_price_cents],
+    )
+    await client.query("UPDATE companies SET billing_status = 'expired', updated_at = now() WHERE id = $1", [current.id])
+  })
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, $2, $3, $4::jsonb)', [scope.userId, current.id, 'subscription.cancel', JSON.stringify({ reason: body.data.reason ?? null, hadAsaasSubscription: Boolean(current.asaas_subscription_id) })])
+  return subscriptionView((await subscriptionRows(current.id)).rows[0])
+})
+
+// Lista de clientes para escolher qual chatbot ou qual tráfego abrir. Sem nenhum dado financeiro.
+app.get('/api/admin/companies', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master', 'traffic'])) return
+  const { rows } = await query(
+    `SELECT c.id, c.name, c.plan, c.created_at, (c.traffic_access_granted_at IS NOT NULL) AS conversations_authorized, c.traffic_access_granted_at,
+       o.name AS owner_name, COALESCE(bs.is_active, false) AS bot_active,
+       (SELECT count(*)::int FROM whatsapp_channels w WHERE w.company_id = c.id AND w.status = 'connected') AS connected_channels,
+       (SELECT count(*)::int FROM chatbot_rules r WHERE r.company_id = c.id AND r.is_active) AS bot_rules
+     FROM companies c
+     LEFT JOIN LATERAL (SELECT u.name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.company_id = c.id AND m.role = 'owner' ORDER BY m.created_at LIMIT 1) o ON true
+     LEFT JOIN chatbot_settings bs ON bs.company_id = c.id
+     WHERE NOT EXISTS (SELECT 1 FROM memberships mm JOIN users uu ON uu.id = mm.user_id WHERE mm.company_id = c.id AND uu.platform_role IS NOT NULL)
+     ORDER BY lower(c.name)`,
+  )
+  return rows
+})
+
+// Desempenho de tráfego de todos os clientes na janela escolhida: investimento, leads do CRM, vendas confirmadas e retorno.
+app.get('/api/admin/traffic', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master', 'traffic'])) return
+  const parsed = z.object({ days: z.coerce.number().int().min(7).max(365).default(30) }).safeParse(request.query)
+  if (!parsed.success) return reply.code(400).send({ error: 'Período inválido.' })
+  const { rows } = await query(
+    `WITH win AS (SELECT (current_date - $1::int) AS start_day, current_date AS end_day)
+     SELECT c.id, c.name, (c.traffic_access_granted_at IS NOT NULL) AS conversations_authorized,
+       COALESCE(m.spend, 0)::float8 AS spend, COALESCE(m.reported_leads, 0)::int AS reported_leads, COALESCE(m.campaigns, 0)::int AS campaigns,
+       COALESCE(l.leads, 0)::int AS crm_leads, COALESCE(s.sales, 0)::int AS confirmed_sales, COALESCE(s.revenue, 0)::float8 AS revenue
+     FROM companies c CROSS JOIN win
+     LEFT JOIN LATERAL (SELECT sum(spend) AS spend, sum(reported_leads) AS reported_leads, count(*) AS campaigns FROM traffic_metrics t
+        WHERE t.company_id = c.id AND t.period_end >= win.start_day AND t.period_start <= win.end_day) m ON true
+     LEFT JOIN LATERAL (SELECT count(*) AS leads FROM opportunities o WHERE o.company_id = c.id AND o.created_at >= win.start_day
+        AND lower(COALESCE(o.source, '')) IN (SELECT lower(source) FROM traffic_metrics WHERE company_id = c.id)) l ON true
+     LEFT JOIN LATERAL (SELECT count(*) AS sales, sum(sl.amount) AS revenue FROM sales sl JOIN opportunities o ON o.id = sl.opportunity_id
+        WHERE sl.company_id = c.id AND sl.status = 'confirmed' AND sl.confirmed_at >= win.start_day
+        AND lower(COALESCE(o.source, '')) IN (SELECT lower(source) FROM traffic_metrics WHERE company_id = c.id)) s ON true
+     WHERE NOT EXISTS (SELECT 1 FROM memberships mm JOIN users uu ON uu.id = mm.user_id WHERE mm.company_id = c.id AND uu.platform_role IS NOT NULL)
+       AND (COALESCE(m.campaigns, 0) > 0 OR COALESCE(l.leads, 0) > 0)
+     ORDER BY COALESCE(m.spend, 0) DESC, lower(c.name)`, [parsed.data.days],
+  )
+  return { days: parsed.data.days, items: rows }
+})
+
+app.get('/api/admin/audit', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const { rows } = await query(
+    `SELECT a.id, a.action, a.detail, a.created_at, u.name AS user_name, c.name AS company_name
+     FROM admin_audit_log a JOIN users u ON u.id = a.user_id LEFT JOIN companies c ON c.id = a.company_id ORDER BY a.created_at DESC LIMIT 100`,
+  )
+  return rows
 })
 
 app.get('/api/dashboard', { preHandler: authenticate }, async (request, reply) => {
@@ -674,7 +890,7 @@ app.get('/api/traffic', { preHandler: authenticate }, async (request, reply) => 
   const scope = await companyScope(request, reply)
   if (!scope) return
   const { rows } = await query(
-    `SELECT tm.id, tm.source, tm.platform, tm.period_start, tm.period_end, tm.spend, tm.reported_leads, tm.impressions, tm.clicks,
+    `SELECT tm.id, tm.source, tm.platform, tm.period_start::text AS period_start, tm.period_end::text AS period_end, tm.spend, tm.reported_leads, tm.impressions, tm.clicks,
        COALESCE((SELECT count(*) FROM opportunities o WHERE o.company_id = tm.company_id AND lower(COALESCE(o.source, '')) = lower(tm.source)
           AND o.created_at >= tm.period_start AND o.created_at < tm.period_end + 1), 0)::text AS crm_leads,
        COALESCE((SELECT count(*) FROM sales s JOIN opportunities o ON o.id = s.opportunity_id WHERE s.company_id = tm.company_id
