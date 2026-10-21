@@ -81,6 +81,11 @@ test('cria cliente, assinatura e cobrança avulsa com os cabeçalhos e corpo cer
   })
   assert.equal(calls[0].accessToken, 'chave-de-teste')
 
+  // Pix e boleto: CEP e número vazios não vão para o Asaas (o cadastro do cliente aceita sem endereço)
+  await createCustomer({ name: 'Maria Cliente', email: 'maria@teste.com', cpfCnpj: '12345678909', phone: '85999990000', postalCode: '', addressNumber: '' }, 'empresa-2')
+  assert.deepEqual(calls[calls.length - 1].body, { name: 'Maria Cliente', email: 'maria@teste.com', cpfCnpj: '12345678909', mobilePhone: '85999990000', externalReference: 'empresa-2' })
+  calls.pop()
+
   const subscription = await createSubscription({ customerId: 'cus_1', billingType: 'PIX', valueCents: 8_990, description: 'Otimiza CRM', externalReference: 'empresa-1' })
   assert.deepEqual(subscription, { id: 'sub_1', status: 'ACTIVE' })
   assert.equal(calls[1].body?.cycle, 'MONTHLY')

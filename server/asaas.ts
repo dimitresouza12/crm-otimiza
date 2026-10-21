@@ -48,16 +48,19 @@ export const asaasBillingType = (method: BillingMethod): AsaasBillingType =>
 
 export const isRecurring = (method: BillingMethod) => method === 'pix' || method === 'boleto' || method === 'card_recurring'
 
+// CEP e número só são obrigatórios no cartão (o Asaas os exige para validar o titular); no Pix e no boleto podem vir vazios.
 export type BillingHolder = { name: string; email: string; cpfCnpj: string; phone: string; postalCode: string; addressNumber: string }
 
 export const createCustomer = async (holder: BillingHolder, externalReference: string) => {
+  const postalCode = holder.postalCode.replace(/\D/g, '')
+  const addressNumber = holder.addressNumber.trim()
   const result = await request('/customers', 'POST', {
     name: holder.name,
     email: holder.email,
     cpfCnpj: holder.cpfCnpj.replace(/\D/g, ''),
     mobilePhone: holder.phone.replace(/\D/g, ''),
-    postalCode: holder.postalCode.replace(/\D/g, ''),
-    addressNumber: holder.addressNumber,
+    ...(postalCode ? { postalCode } : {}),
+    ...(addressNumber ? { addressNumber } : {}),
     externalReference,
   })
   const id = text(result.id)

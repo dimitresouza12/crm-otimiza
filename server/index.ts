@@ -1012,9 +1012,11 @@ const billingHolderSchema = z.object({
   email: z.string().email().max(160),
   cpfCnpj: z.string().refine(isValidCpfCnpj, 'CPF ou CNPJ inválido.'),
   phone: z.string().min(10).max(20),
-  postalCode: z.string().min(8).max(9),
-  addressNumber: z.string().min(1).max(20),
+  // CEP e número só valem para cartão (ver cardHolderSchema); no Pix e no boleto o formulário nem os pede.
+  postalCode: z.string().trim().max(9).default(''),
+  addressNumber: z.string().trim().max(20).default(''),
 })
+const cardHolderSchema = billingHolderSchema.refine((holder) => holder.postalCode.replace(/\D/g, '').length === 8 && holder.addressNumber.length > 0, { message: 'Para pagar com cartão, informe o CEP e o número do endereço.', path: ['postalCode'] })
 
 const billingCardSchema = z.object({
   holderName: z.string().min(2).max(140),
@@ -1029,6 +1031,7 @@ const checkoutSchema = z.object({
   holder: billingHolderSchema,
   card: billingCardSchema.optional(),
 }).refine((value) => (value.method === 'card' || value.method === 'card_recurring') ? Boolean(value.card) : true, { message: 'Informe os dados do cartão.', path: ['card'] })
+  .refine((value) => !(value.method === 'card' || value.method === 'card_recurring') || cardHolderSchema.safeParse(value.holder).success, { message: 'Para pagar com cartão, informe o CEP e o número do endereço.', path: ['holder', 'postalCode'] })
 
 const billingDescription = (plan: string, channelLimit: number) =>
   `${plan === 'chatbot' ? 'Otimiza CRM + Chatbot' : 'Otimiza CRM'} · ${channelLimit} número${channelLimit === 1 ? '' : 's'}`
@@ -1156,7 +1159,7 @@ app.get('/api/billing/current', { preHandler: authenticate }, async (request, re
   return { subscription, payment, pix, boleto }
 })
 
-const cardUpdateSchema = z.object({ holder: billingHolderSchema, card: billingCardSchema })
+const cardUpdateSchema = z.object({ holder: cardHolderSchema, card: billingCardSchema })
 
 // Troca de cartão de uma assinatura recorrente (cartão recusado, vencido, ou cliente trocou de banco) — não exige novo checkout.
 app.put('/api/billing/card', { preHandler: authenticate, config: { rateLimit: { max: 10, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
@@ -2229,6 +2232,13 @@ app.get('/*', async (request, reply) => {
 })
 
 app.setErrorHandler((error, _request, reply) => {
+  const status = (error as { statusCode?: number }).statusCode
+  // Erros do cliente (limite de tentativas, corpo grande demais, JSON inválido) mantêm o código 4xx em vez de virar 500.
+  if (status && status >= 400 && status < 500) {
+    app.log.warn({ status, message: error.message }, 'Requisição recusada')
+    if (!reply.sent) reply.code(status).send({ error: status === 429 ? 'Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente de novo.' : 'Requisição inválida.' })
+    return
+  }
   app.log.error(error)
   if (!reply.sent) reply.code(500).send({ error: 'Não foi possível concluir esta operação.' })
 })
