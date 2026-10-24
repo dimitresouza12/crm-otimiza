@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, ArrowLeft, Bot, Check, CircleAlert, Eye, History, LockKeyhole, Megaphone, MessageCircleMore, Search, ShieldCheck, TrendingUp, Wallet, X } from 'lucide-react'
-import { api, type AdminAuditRow, type AdminCompany, type AdminPayment, type AdminSubscription, type AdminSubscriptions, type AdminTrafficRow, type Session } from './lib/api'
+import { AlertTriangle, ArrowLeft, Bot, CalendarCheck, CalendarPlus, CalendarRange, Check, CircleAlert, Eye, Gift, History, Infinity as InfinityIcon, LockKeyhole, Megaphone, MessageCircleMore, Search, ShieldCheck, Timer, TrendingUp, Wallet, X } from 'lucide-react'
+import { api, type AdminAccessAction, type AdminAuditRow, type AdminCompany, type AdminPayment, type AdminSubscription, type AdminSubscriptions, type AdminTeamMember, type AdminTrafficRow, type Session } from './lib/api'
 import { ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 
@@ -12,20 +12,24 @@ const dayTime = (iso: string) => new Date(iso).toLocaleString('pt-BR', { day: '2
 const errorText = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback
 
 const planLabel = (plan: string) => ({ crm: 'CRM', chatbot: 'Chatbot', essential: 'Essencial', pro: 'Pro', automation: 'Automação' } as Record<string, string>)[plan] ?? plan
-const stateLabel: Record<AdminSubscription['state'], string> = { trial: 'Em teste', trial_expired: 'Teste expirado', active: 'Ativa', overdue: 'Inadimplente', canceled: 'Cancelada' }
-const cycleLabel: Record<AdminSubscription['cycle'], string> = { trial: 'Teste grátis', monthly: 'Mensal', annual: 'Anual' }
+const stateLabel: Record<AdminSubscription['state'], string> = { trial: 'Em teste', trial_expired: 'Teste expirado', active: 'Ativa', overdue: 'Inadimplente', canceled: 'Cancelada', expired: 'Acesso encerrado' }
+const cycleLabel: Record<AdminSubscription['cycle'], string> = { trial: 'Teste grátis', monthly: 'Mensal', annual: 'Anual', lifetime: 'Vitalício' }
+const grantLabel = { monthly: 'Acesso mensal', annual: 'Acesso anual', lifetime: 'Acesso vitalício' } as const
+const daysText = (days: number | null) => days === null ? '' : days === 0 ? 'termina hoje' : `${days} ${days === 1 ? 'dia' : 'dias'}`
 const paymentLabel = (status: string) => ({ PENDING: 'Aguardando', RECEIVED: 'Pago', CONFIRMED: 'Confirmado', RECEIVED_IN_CASH: 'Pago', OVERDUE: 'Vencido', REFUNDED: 'Estornado', REFUND_REQUESTED: 'Estorno solicitado', CHARGEBACK_REQUESTED: 'Chargeback', AWAITING_RISK_ANALYSIS: 'Em análise', DELETED: 'Removido' } as Record<string, string>)[status] ?? status
 const paymentTone = (status: string) => ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(status) ? 'ok' : status === 'OVERDUE' ? 'bad' : 'wait'
 const methodLabel = (type: string | null) => ({ pix: 'Pix', boleto: 'Boleto', card: 'Cartão', card_recurring: 'Cartão recorrente' } as Record<string, string>)[type ?? ''] ?? '—'
-const auditLabel = (action: string) => action.startsWith('subscription.cancel') ? 'Cancelou uma assinatura' : action.startsWith('PUT /api/chatbot') || action.startsWith('POST /api/chatbot') || action.startsWith('DELETE /api/chatbot') ? 'Alterou o chatbot' : action.startsWith('POST /api/traffic') ? 'Registrou uma campanha' : action.startsWith('GET /api/conversations') ? 'Leu conversas' : action
+const accessAuditLabel = (action: string) => ({ 'team.role': 'Mudou o papel de alguém da equipe', 'access.trial_plus_7': 'Deu +7 dias de teste', 'access.monthly': 'Liberou acesso mensal', 'access.annual': 'Liberou acesso anual', 'access.lifetime': 'Liberou acesso vitalício', 'access.revoke': 'Revogou o acesso liberado' } as Record<string, string>)[action]
+const auditLabel = (action: string) => accessAuditLabel(action) ?? (action.startsWith('subscription.cancel') ? 'Cancelou uma assinatura' : action.startsWith('PUT /api/chatbot') || action.startsWith('POST /api/chatbot') || action.startsWith('DELETE /api/chatbot') ? 'Alterou o chatbot' : action.startsWith('POST /api/traffic') ? 'Registrou uma campanha' : action.startsWith('GET /api/conversations') ? 'Leu conversas' : action)
 
 function StatusBadge({ tone, children }: { tone: 'ok' | 'bad' | 'wait' | 'info' | 'muted'; children: ReactNode }) {
   return <span className={`adm-badge adm-badge--${tone}`}>{children}</span>
 }
-const stateTone = (state: AdminSubscription['state']) => state === 'active' ? 'ok' : state === 'overdue' ? 'bad' : state === 'trial' ? 'info' : 'muted'
+const stateTone = (state: AdminSubscription['state']) => state === 'active' ? 'ok' : state === 'overdue' ? 'bad' : state === 'trial' ? 'info' : state === 'expired' ? 'wait' : 'muted'
 
-function Kpi({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'bad' }) {
-  return <div className={`adm-kpi ${tone === 'bad' ? 'adm-kpi--bad' : ''}`}><span>{label}</span><b>{value}</b>{hint && <small>{hint}</small>}</div>
+// Cartão de número no mesmo estilo dos cartões do Dashboard: ícone, rótulo, valor grande e uma linha de contexto.
+function Kpi({ label, value, hint, tone, icon, emphasis }: { label: string; value: string; hint?: string; tone?: 'bad'; icon?: ReactNode; emphasis?: boolean }) {
+  return <div className={`adm-kpi${tone === 'bad' ? ' adm-kpi--bad' : ''}${emphasis ? ' adm-kpi--emphasis' : ''}`}><div className="adm-kpi__top"><span>{label}</span>{icon && <i aria-hidden="true">{icon}</i>}</div><b>{value}</b>{hint && <small>{hint}</small>}</div>
 }
 
 function PageHead({ eyebrow, title, text, aside }: { eyebrow: string; title: string; text: string; aside?: ReactNode }) {
@@ -37,14 +41,15 @@ function Notice({ tone = 'error', children }: { tone?: 'error' | 'info'; childre
 }
 
 // ───────────────────────── Assinaturas (financeiro, só master) ─────────────────────────
-type Filter = 'all' | 'trial' | 'active' | 'annual' | 'overdue' | 'canceled' | 'trial_expired'
+type Filter = 'all' | 'trial' | 'active' | 'annual' | 'granted' | 'overdue' | 'canceled' | 'trial_expired'
 const filterDefs: Array<{ id: Filter; label: string }> = [
-  { id: 'all', label: 'Todas' }, { id: 'trial', label: 'Em teste' }, { id: 'active', label: 'Ativas' }, { id: 'annual', label: 'Anuais' },
+  { id: 'all', label: 'Todas' }, { id: 'trial', label: 'Em teste' }, { id: 'active', label: 'Ativas' }, { id: 'annual', label: 'Anuais' }, { id: 'granted', label: 'Liberadas' },
   { id: 'overdue', label: 'Inadimplentes' }, { id: 'trial_expired', label: 'Teste expirado' }, { id: 'canceled', label: 'Canceladas' },
 ]
-const matchesFilter = (item: AdminSubscription, filter: Filter) => filter === 'all' ? true : filter === 'annual' ? item.cycle === 'annual' && (item.state === 'active' || item.state === 'overdue') : item.state === filter
+const matchesFilter = (item: AdminSubscription, filter: Filter) => filter === 'all' ? true : filter === 'granted' ? item.granted : filter === 'annual' ? item.cycle === 'annual' && !item.granted && (item.state === 'active' || item.state === 'overdue') : item.state === filter
 
 function valueCell(item: AdminSubscription) {
+  if (item.granted) return <><b>{item.grant?.kind === 'lifetime' ? 'Vitalício' : 'Cortesia'}</b><small>sem cobrança</small></>
   if (item.state === 'canceled') return <span className="adm-muted">—</span>
   if (item.cycle === 'annual') return <><b>{brlCents(item.annualCents ?? item.monthlyCents * 12)}</b><small>por ano</small></>
   if (item.state === 'trial' || item.state === 'trial_expired') return <><b className="adm-muted">{brlCents(item.priceCents)}</b><small>por mês, após o teste</small></>
@@ -52,7 +57,11 @@ function valueCell(item: AdminSubscription) {
 }
 
 function nextCell(item: AdminSubscription) {
-  if (item.state === 'trial') return <><b>{item.trialDaysLeft === 0 ? 'Termina hoje' : `${item.trialDaysLeft} ${item.trialDaysLeft === 1 ? 'dia' : 'dias'}`}</b><small>teste até {day(item.trialEndsAt)}</small></>
+  if (item.grant) {
+    if (item.grant.kind === 'lifetime') return <><b>Sem prazo</b><small>acesso vitalício</small></>
+    return item.grant.active ? <><b>Até {day(item.grant.until)}</b><small>{daysText(item.grant.daysLeft)}</small></> : <><b>Encerrou</b><small>em {day(item.grant.until)}</small></>
+  }
+  if (item.state === 'trial') return <><b>{item.trialDaysLeft === 0 ? 'Termina hoje' : `${item.trialDaysLeft} ${item.trialDaysLeft === 1 ? 'dia' : 'dias'}`}</b><small>teste até {day(item.trialEndsAt)}</small><span className="adm-meter" aria-hidden="true"><i style={{ width: `${Math.max(6, Math.min(100, (((item.trialDaysLeft ?? 0) + 1) / 14) * 100))}%` }} /></span></>
   if (item.state === 'trial_expired') return <><b>Expirou</b><small>em {day(item.trialEndsAt)}</small></>
   if (item.state === 'canceled') return <span className="adm-muted">—</span>
   return <><b>{day(item.nextDueDate)}</b><small>{item.autoRenew ? 'renovação automática' : 'próxima cobrança'}</small></>
@@ -85,11 +94,12 @@ export function AdminSubscriptionsPage({ session }: { session: Session }) {
     {!data && !error && <p className="page-loading">Carregando assinaturas…</p>}
     {data && <>
       <section className="adm-kpis" aria-label="Resumo financeiro">
-        <Kpi label="Receita mensal recorrente" value={brlCents(data.totals.monthlyRecurringCents)} hint={`${data.totals.active + data.totals.overdue} ${data.totals.active + data.totals.overdue === 1 ? 'assinatura paga' : 'assinaturas pagas'}`} />
-        <Kpi label="Em teste grátis" value={String(data.totals.trial)} hint="ainda dentro dos 7 dias" />
-        <Kpi label="Planos anuais" value={String(data.totals.annual)} hint="pagamento adiantado de 12 meses" />
-        <Kpi label="Inadimplentes" value={String(data.totals.overdue)} hint={data.totals.overdue ? 'cobrar hoje' : 'nenhum no momento'} tone={data.totals.overdue ? 'bad' : undefined} />
-        <Kpi label="Total já recebido" value={brlCents(data.totals.totalPaidCents)} hint={`${data.totals.companies} ${data.totals.companies === 1 ? 'empresa' : 'empresas'} no total`} />
+        <Kpi emphasis icon={<TrendingUp size={16} />} label="Receita mensal recorrente" value={brlCents(data.totals.monthlyRecurringCents)} hint={`${data.totals.active + data.totals.overdue - data.totals.granted} ${data.totals.active + data.totals.overdue - data.totals.granted === 1 ? 'assinatura paga' : 'assinaturas pagas'}`} />
+        <Kpi icon={<Timer size={16} />} label="Em teste grátis" value={String(data.totals.trial)} hint={data.totals.trialExpired ? `${data.totals.trialExpired} com teste expirado` : 'ainda dentro do prazo'} />
+        <Kpi icon={<Gift size={16} />} label="Acesso liberado" value={String(data.totals.granted)} hint={data.totals.lifetime ? `${data.totals.lifetime} ${data.totals.lifetime === 1 ? 'vitalício' : 'vitalícios'}` : 'cortesias e parcerias'} />
+        <Kpi icon={<CalendarRange size={16} />} label="Planos anuais" value={String(data.totals.annual)} hint="pagamento adiantado de 12 meses" />
+        <Kpi icon={<AlertTriangle size={16} />} label="Inadimplentes" value={String(data.totals.overdue)} hint={data.totals.overdue ? 'cobrar hoje' : 'nenhum no momento'} tone={data.totals.overdue ? 'bad' : undefined} />
+        <Kpi icon={<Wallet size={16} />} label="Total já recebido" value={brlCents(data.totals.totalPaidCents)} hint={`${data.totals.companies} ${data.totals.companies === 1 ? 'empresa' : 'empresas'} no total`} />
       </section>
 
       <section className="panel adm-table-panel">
@@ -120,6 +130,61 @@ export function AdminSubscriptionsPage({ session }: { session: Session }) {
     </>}
     {open && <SubscriptionDrawer key={open.companyId} session={session} item={open} onClose={() => setOpenId(null)} onChanged={(updated) => setData((current) => current && { ...current, items: current.items.map((item) => item.companyId === updated.companyId ? updated : item) })} onReload={load} />}
   </>
+}
+
+// ───────────────────────── Liberar acesso à mão (mensal, anual, vitalício, +7 dias de teste) ─────────────────────────
+const accessOptions: Array<{ action: Exclude<AdminAccessAction, 'revoke'>; label: string; text: string; done: string; icon: ReactNode }> = [
+  { action: 'trial_plus_7', label: '+7 dias de teste', text: 'Estende o teste grátis em 7 dias.', done: 'Mais 7 dias de teste liberados.', icon: <CalendarPlus size={18} /> },
+  { action: 'monthly', label: 'Acesso mensal', text: 'Libera por 1 mês, sem cobrança.', done: 'Acesso mensal liberado.', icon: <CalendarCheck size={18} /> },
+  { action: 'annual', label: 'Acesso anual', text: 'Libera por 12 meses, sem cobrança.', done: 'Acesso anual liberado.', icon: <CalendarRange size={18} /> },
+  { action: 'lifetime', label: 'Acesso vitalício', text: 'Sem data para acabar.', done: 'Acesso vitalício liberado.', icon: <InfinityIcon size={18} /> },
+]
+
+function AccessPanel({ session, item, onChanged, onReload }: { session: Session; item: AdminSubscription; onChanged: (item: AdminSubscription) => void; onReload: () => Promise<void> }) {
+  const [pending, setPending] = useState<AdminAccessAction | null>(null)
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState('')
+  const blocked = item.hasPaidSubscription
+  const lifetime = item.grant?.kind === 'lifetime'
+  const option = accessOptions.find((entry) => entry.action === pending)
+
+  const apply = async () => {
+    if (!pending) return
+    setSaving(true); setError(''); setDone('')
+    try {
+      onChanged(await api.adminAccess(session, item.companyId, pending, note))
+      setDone(pending === 'revoke' ? 'Acesso revogado.' : option?.done ?? 'Pronto.')
+      setPending(null); setNote(''); void onReload()
+    } catch (reason) { setError(errorText(reason, 'Não foi possível liberar o acesso.')) } finally { setSaving(false) }
+  }
+
+  return <section className="adm-access" aria-label="Liberar acesso">
+    <div className="adm-access__head"><div><h3>Liberar acesso</h3><p>Dê mais tempo de teste ou libere o acesso sem cobrança. Tudo fica registrado na auditoria.</p></div></div>
+    {item.grant && <p className={`adm-access__now adm-access__now--${item.grant.active ? 'on' : 'off'}`}><Gift size={15} aria-hidden="true" /><span><b>{grantLabel[item.grant.kind]}</b>{item.grant.kind === 'lifetime' ? ' · sem data para acabar' : item.grant.active ? ` · até ${day(item.grant.until)} (${daysText(item.grant.daysLeft)})` : ` · encerrou em ${day(item.grant.until)}`}{item.grant.note ? <em> “{item.grant.note}”</em> : null}</span></p>}
+    {blocked && <Notice tone="info">Esta empresa tem uma assinatura paga ativa. Para liberar acesso à mão, cancele a assinatura antes.</Notice>}
+    <div className="adm-access__grid" role="group" aria-label="Tipo de acesso">
+      {accessOptions.map((entry) => <button key={entry.action} type="button" className={`adm-access__opt${pending === entry.action ? ' is-on' : ''}`} aria-pressed={pending === entry.action} disabled={blocked || lifetime} onClick={() => { setPending(entry.action); setError(''); setDone('') }}>
+        <i aria-hidden="true">{entry.icon}</i><b>{entry.label}</b><small>{entry.text}</small>
+      </button>)}
+    </div>
+    {item.grant && <button type="button" className="adm-btn adm-btn--danger-outline adm-access__revoke" disabled={blocked} onClick={() => { setPending('revoke'); setError(''); setDone('') }}>Revogar acesso liberado</button>}
+    {pending && <div className="adm-access__confirm">
+      <p><AlertTriangle size={16} aria-hidden="true" /><span>{pending === 'revoke'
+        ? <>Vai <b>encerrar o acesso</b> de <b>{item.company}</b> agora. O teste e a assinatura não voltam sozinhos.</>
+        : pending === 'trial_plus_7'
+          ? <>Vai somar <b>7 dias</b> ao teste de <b>{item.company}</b>{item.state === 'trial_expired' ? ', que volta a ter acesso a partir de agora' : ''}.</>
+          : pending === 'lifetime'
+            ? <>Vai liberar o acesso <b>vitalício</b> de <b>{item.company}</b>, sem cobrança e sem data para acabar.</>
+            : <>Vai liberar <b>{pending === 'monthly' ? '1 mês' : '12 meses'}</b> de acesso para <b>{item.company}</b>, sem cobrança{item.grant?.active && item.grant.kind !== 'lifetime' ? ' (soma ao que ainda resta)' : ''}.</>}</span></p>
+      <label>Anotação <small>opcional, fica na auditoria</small><input value={note} maxLength={300} onChange={(event) => setNote(event.target.value)} placeholder="Ex.: parceria com a agência, cortesia do mês" /></label>
+      {error && <Notice>{error}</Notice>}
+      <div className="adm-confirm__actions"><button type="button" className="adm-btn" onClick={() => { setPending(null); setError('') }} disabled={saving}>Voltar</button><button type="button" className={`adm-btn ${pending === 'revoke' ? 'adm-btn--danger' : 'adm-btn--primary'}`} onClick={() => void apply()} disabled={saving}>{saving ? 'Salvando…' : pending === 'revoke' ? 'Confirmar revogação' : 'Confirmar'}</button></div>
+    </div>}
+    {!pending && error && <Notice>{error}</Notice>}
+    {done && <Notice tone="info">{done}</Notice>}
+  </section>
 }
 
 function SubscriptionDrawer({ session, item, onClose, onChanged, onReload }: { session: Session; item: AdminSubscription; onClose: () => void; onChanged: (item: AdminSubscription) => void; onReload: () => Promise<void> }) {
@@ -154,11 +219,15 @@ function SubscriptionDrawer({ session, item, onClose, onChanged, onReload }: { s
         <dl className="adm-facts">
           <div><dt>Plano</dt><dd>{planLabel(item.plan)} · {item.channelLimit} {item.channelLimit === 1 ? 'número' : 'números'}</dd></div>
           <div><dt>{item.cycle === 'annual' ? 'Valor anual' : 'Valor mensal'}</dt><dd>{item.cycle === 'annual' ? `${brlCents(item.annualCents ?? item.monthlyCents * 12)} (${brlCents(item.monthlyCents)}/mês)` : brlCents(item.priceCents)}</dd></div>
-          <div><dt>{item.state === 'trial' || item.state === 'trial_expired' ? 'Fim do teste' : 'Próxima cobrança'}</dt><dd>{day(item.state === 'trial' || item.state === 'trial_expired' ? item.trialEndsAt : item.nextDueDate)}</dd></div>
+          {item.grant
+            ? <div><dt>Acesso liberado</dt><dd>{grantLabel[item.grant.kind]}{item.grant.kind === 'lifetime' ? '' : ` · ${item.grant.active ? 'até' : 'encerrou em'} ${day(item.grant.until)}`}</dd></div>
+            : <div><dt>{item.state === 'trial' || item.state === 'trial_expired' ? 'Fim do teste' : 'Próxima cobrança'}</dt><dd>{day(item.state === 'trial' || item.state === 'trial_expired' ? item.trialEndsAt : item.nextDueDate)}</dd></div>}
           <div><dt>Forma de pagamento</dt><dd>{item.card ? `${item.card.brand ?? 'Cartão'} final ${item.card.last4}` : methodLabel(item.billingType)}</dd></div>
           <div><dt>Total já pago</dt><dd>{brlCents(item.totalPaidCents)}</dd></div>
           <div><dt>Cliente desde</dt><dd>{day(item.createdAt)}</dd></div>
         </dl>
+
+        <AccessPanel session={session} item={item} onChanged={onChanged} onReload={onReload} />
 
         <h3 className="adm-sub">Pagamentos</h3>
         {payments === null ? <p className="page-loading">Carregando…</p> : paymentsError ? <Notice>{paymentsError}</Notice> : payments.length ? <ul className="adm-payments">{payments.map((payment) => <li key={payment.id}>
@@ -180,6 +249,103 @@ function SubscriptionDrawer({ session, item, onClose, onChanged, onReload }: { s
         {item.state === 'canceled' && <Notice tone="info">Assinatura cancelada. A empresa não acessa mais o CRM.</Notice>}
       </div>
     </aside>
+  </>
+}
+
+// ───────────────────────── Equipe: quem é administrador e quem é gestor de tráfego (só master) ─────────────────────────
+const roleLabel = { master: 'Administrador', traffic: 'Gestor de tráfego' } as const
+const roleTone = (role: 'master' | 'traffic' | null) => role === 'master' ? 'info' : role === 'traffic' ? 'ok' : 'muted'
+const roleChoices: Array<{ role: 'master' | 'traffic'; title: string; text: string; icon: ReactNode }> = [
+  { role: 'master', title: 'Administrador', text: 'Vê o financeiro das assinaturas, libera acessos, cancela planos, configura o chatbot e a gestão de tráfego dos clientes. Também gerencia esta equipe.', icon: <ShieldCheck size={18} /> },
+  { role: 'traffic', title: 'Gestor de tráfego', text: 'Vê só o chatbot dos clientes e a gestão de tráfego. Não vê valores de assinatura, não libera acesso e não gerencia a equipe. As conversas só abrem se o cliente autorizar.', icon: <Megaphone size={18} /> },
+]
+
+export function AdminTeamPage({ session }: { session: Session }) {
+  const [members, setMembers] = useState<AdminTeamMember[] | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<AdminTeamMember[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [pending, setPending] = useState<{ person: AdminTeamMember; role: 'master' | 'traffic' | 'none' } | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    try { setMembers(await api.adminTeam(session)); setError('') } catch (reason) { setMembers([]); setError(errorText(reason, 'Não foi possível carregar a equipe.')) }
+  }, [session])
+  useEffect(() => { void load() }, [load])
+
+  const search = async () => {
+    if (query.trim().length < 3) { setError('Digite pelo menos 3 letras do nome ou do e-mail.'); return }
+    setSearching(true); setError(''); setNotice('')
+    try { setHits(await api.adminTeamSearch(session, query.trim())) } catch (reason) { setHits([]); setError(errorText(reason, 'Não foi possível buscar.')) } finally { setSearching(false) }
+  }
+
+  const confirm = async () => {
+    if (!pending) return
+    setSaving(true); setError('')
+    try {
+      await api.adminSetRole(session, pending.person.userId, pending.role)
+      setNotice(pending.role === 'none' ? `${pending.person.name} saiu da equipe.` : `${pending.person.name} agora é ${roleLabel[pending.role].toLowerCase()}. A pessoa precisa sair e entrar de novo no CRM.`)
+      setPending(null); setHits(null); setQuery(''); await load()
+    } catch (reason) { setError(errorText(reason, 'Não foi possível salvar.')) } finally { setSaving(false) }
+  }
+
+  const masters = (members ?? []).filter((member) => member.role === 'master').length
+  const traffic = (members ?? []).filter((member) => member.role === 'traffic').length
+  const answer = (person: AdminTeamMember, role: 'master' | 'traffic' | 'none') => { setPending({ person, role }); setError(''); setNotice('') }
+
+  return <>
+    <PageHead eyebrow="EQUIPE OTIMIZA · ACESSOS" title="Equipe" text="Defina quem é administrador e quem é gestor de tráfego. A pessoa precisa ter criado uma conta no CRM antes." />
+    {error && <Notice>{error}</Notice>}
+    {notice && <Notice tone="info">{notice}</Notice>}
+    {!members && !error && <p className="page-loading">Carregando equipe…</p>}
+    {members && <>
+      <section className="adm-roles" aria-label="Diferença entre os papéis">
+        {roleChoices.map((choice) => <article key={choice.role} className="adm-role-card"><i aria-hidden="true">{choice.icon}</i><div><b>{choice.title} <em>{choice.role === 'master' ? masters : traffic}</em></b><p>{choice.text}</p></div></article>)}
+      </section>
+
+      <section className="panel adm-table-panel">
+        {members.length ? <table className="adm-table adm-table--team">
+          <thead><tr><th scope="col">Pessoa</th><th scope="col">Papel</th><th scope="col">Conta de cliente</th><th scope="col"><span className="adm-sr">Ações</span></th></tr></thead>
+          <tbody>{members.map((member) => <tr key={member.userId}>
+            <td data-label="Pessoa"><b>{member.name}</b><small>{member.email}</small></td>
+            <td data-label="Papel"><StatusBadge tone={roleTone(member.role)}>{member.role ? roleLabel[member.role] : 'Sem papel'}</StatusBadge></td>
+            <td data-label="Conta de cliente">{member.companyName ? <>{member.companyName}<small>fora das listas de clientes</small></> : <span className="adm-muted">—</span>}</td>
+            <td data-label="Ações" className="adm-team__actions">
+              {member.role === 'master' ? <button type="button" className="adm-btn" onClick={() => answer(member, 'traffic')}>Tornar gestor de tráfego</button> : <button type="button" className="adm-btn" onClick={() => answer(member, 'master')}>Tornar administrador</button>}
+              <button type="button" className="adm-btn adm-btn--danger-outline" onClick={() => answer(member, 'none')}>Remover da equipe</button>
+            </td>
+          </tr>)}</tbody>
+        </table> : <div className="adm-empty"><ShieldCheck size={22} /><b>Ninguém na equipe ainda.</b></div>}
+      </section>
+
+      <section className="panel adm-team-add">
+        <div className="panel__header"><div><span className="eyebrow">ADICIONAR PESSOA</span><h2>Dar um papel a quem já tem conta</h2></div></div>
+        <form className="adm-team-add__form" onSubmit={(event) => { event.preventDefault(); void search() }}>
+          <label className="adm-search"><Search size={16} aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nome ou e-mail da pessoa" aria-label="Nome ou e-mail da pessoa" /></label>
+          <button type="submit" className="adm-btn adm-btn--primary" disabled={searching}>{searching ? 'Buscando…' : 'Buscar'}</button>
+        </form>
+        {hits && (hits.length
+          ? <ul className="adm-team-hits">{hits.map((hit) => <li key={hit.userId}>
+            <div><b>{hit.name}</b><small>{hit.email}{hit.companyName ? ` · ${hit.companyName}` : ''}</small></div>
+            {hit.role ? <StatusBadge tone={roleTone(hit.role)}>{roleLabel[hit.role]}</StatusBadge> : <div className="adm-team-hits__actions"><button type="button" className="adm-btn" onClick={() => answer(hit, 'traffic')}>Gestor de tráfego</button><button type="button" className="adm-btn adm-btn--primary" onClick={() => answer(hit, 'master')}>Administrador</button></div>}
+          </li>)}</ul>
+          : <p className="adm-muted">Ninguém encontrado. A pessoa precisa criar a conta no CRM primeiro.</p>)}
+      </section>
+    </>}
+
+    {pending && <>
+      <button className="drawer-backdrop" type="button" aria-label="Fechar" onClick={() => !saving && setPending(null)} />
+      <div className="adm-modal" role="dialog" aria-modal="true" aria-labelledby="adm-team-title">
+        <h2 id="adm-team-title">{pending.role === 'none' ? 'Remover da equipe?' : `Tornar ${roleLabel[pending.role].toLowerCase()}?`}</h2>
+        <p><b>{pending.person.name}</b> · {pending.person.email}</p>
+        <p className="adm-modal__text"><AlertTriangle size={16} aria-hidden="true" /><span>{pending.role === 'none'
+          ? <>A pessoa perde na hora o acesso ao painel da equipe. A conta de cliente dela volta a aparecer nas listas.</>
+          : <>{pending.role === 'master' ? 'Ela passa a ver o financeiro, liberar acessos e gerenciar a equipe.' : 'Ela passa a ver só o chatbot e a gestão de tráfego dos clientes.'}{pending.person.companyName ? <> A conta de cliente dela (<b>{pending.person.companyName}</b>) deixa de aparecer nas listas de clientes e nos totais.</> : null} Ela precisa sair e entrar de novo no CRM.</>}</span></p>
+        <div className="adm-confirm__actions"><button type="button" className="adm-btn" onClick={() => setPending(null)} disabled={saving}>Voltar</button><button type="button" className={`adm-btn ${pending.role === 'none' ? 'adm-btn--danger' : 'adm-btn--primary'}`} onClick={() => void confirm()} disabled={saving}>{saving ? 'Salvando…' : 'Confirmar'}</button></div>
+      </div>
+    </>}
   </>
 }
 

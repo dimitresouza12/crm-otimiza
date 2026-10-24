@@ -116,21 +116,28 @@ export const api = {
   adminSubscriptions: (session: Session) => request<AdminSubscriptions>('/api/admin/subscriptions', {}, session),
   adminPayments: (session: Session, companyId: string) => request<AdminPayment[]>(`/api/admin/companies/${companyId}/payments`, {}, session),
   adminCancel: (session: Session, companyId: string, reason: string) => request<AdminSubscription>(`/api/admin/companies/${companyId}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }, session),
+  adminAccess: (session: Session, companyId: string, action: AdminAccessAction, note?: string) => request<AdminSubscription>(`/api/admin/companies/${companyId}/access`, { method: 'POST', body: JSON.stringify({ action, note: note?.trim() || undefined }) }, session),
+  adminTeam: (session: Session) => request<AdminTeamMember[]>('/api/admin/team', {}, session),
+  adminTeamSearch: (session: Session, q: string) => request<AdminTeamMember[]>(`/api/admin/team/search?q=${encodeURIComponent(q)}`, {}, session),
+  adminSetRole: (session: Session, userId: string, role: 'master' | 'traffic' | 'none') => request<AdminTeamMember>(`/api/admin/team/${userId}/role`, { method: 'PUT', body: JSON.stringify({ role }) }, session),
   adminCompanies: (session: Session) => request<AdminCompany[]>('/api/admin/companies', {}, session),
   adminTraffic: (session: Session, days: number) => request<{ days: number; items: AdminTrafficRow[] }>(`/api/admin/traffic?days=${days}`, {}, session),
   adminAudit: (session: Session) => request<AdminAuditRow[]>('/api/admin/audit', {}, session),
 }
 
 export type PlatformRole = 'master' | 'traffic'
+export type AdminTeamMember = { userId: string; name: string; email: string; role: PlatformRole | null; createdAt: string; companyName: string | null }
+export type AdminAccessAction = 'trial_plus_7' | 'monthly' | 'annual' | 'lifetime' | 'revoke'
 export type AdminSubscription = {
   companyId: string; company: string; ownerName: string | null; ownerEmail: string | null; plan: string; channelLimit: number; priceCents: number
-  state: 'trial' | 'trial_expired' | 'active' | 'overdue' | 'canceled'; cycle: 'trial' | 'monthly' | 'annual'; monthlyCents: number; annualCents: number | null
+  state: 'trial' | 'trial_expired' | 'active' | 'overdue' | 'canceled' | 'expired'; cycle: 'trial' | 'monthly' | 'annual' | 'lifetime'; monthlyCents: number; annualCents: number | null
+  granted: boolean; grant: { kind: 'monthly' | 'annual' | 'lifetime'; until: string | null; active: boolean; daysLeft: number | null; note: string | null } | null; hasPaidSubscription: boolean
   trialEndsAt: string | null; trialDaysLeft: number | null; billingType: string | null; autoRenew: boolean; nextDueDate: string | null
   card: { brand: string | null; last4: string } | null; lastPayment: { valueCents: number | null; status: string; paidAt: string | null; dueDate: string | null } | null
   totalPaidCents: number; canCancel: boolean; createdAt: string
 }
 export type AdminSubscriptions = {
-  totals: { companies: number; trial: number; trialExpired: number; active: number; overdue: number; canceled: number; annual: number; monthlyRecurringCents: number; totalPaidCents: number }
+  totals: { companies: number; trial: number; trialExpired: number; active: number; overdue: number; canceled: number; expired: number; annual: number; granted: number; lifetime: number; monthlyRecurringCents: number; totalPaidCents: number }
   items: AdminSubscription[]
 }
 export type AdminPayment = { id: string; billing_type: string | null; value_cents: number; status: string; due_date: string | null; paid_at: string | null; invoice_url: string | null }

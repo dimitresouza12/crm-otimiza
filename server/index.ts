@@ -21,7 +21,7 @@ import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
 import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
-import { cycleOf, daysLeft, isPlatformRole, monthlyEquivalentCents, platformAccess, stateOf, type PlatformRole } from './platform-admin.js'
+import { accessActions, accessStateOf, applyAccess, checkRoleChange, cycleOf, daysLeft, grantIsActive, isPlatformRole, monthlyEquivalentCents, platformAccess, stateOf, type PlatformRole } from './platform-admin.js'
 import {
   asaasBillingType,
   asaasConfigured,
@@ -44,7 +44,7 @@ import { tokenizeCard } from './card-checkout.js'
 import { isValidCpfCnpj } from './document.js'
 
 type Token = { userId: string; companyId: string; role: string }
-type CompanyRow = { company_id: string; role: string; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null }
+type CompanyRow = { company_id: string; role: string; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null; access_grant_kind: string | null; access_grant_until: string | null }
 
 const app = Fastify({
   trustProxy: true,
@@ -147,7 +147,7 @@ const companyScope = async (request: FastifyRequest, reply: FastifyReply, allowE
   const token = currentToken(request)
   const requestedCompanyId = (request.headers['x-company-id'] as string | undefined) ?? token.companyId
   const { rows } = await query<CompanyRow>(
-    `SELECT m.company_id, m.role, c.billing_status, c.trial_ends_at
+    `SELECT m.company_id, m.role, c.billing_status, c.trial_ends_at, c.access_grant_kind, c.access_grant_until
      FROM memberships m JOIN companies c ON c.id = m.company_id
      WHERE m.company_id = $1 AND m.user_id = $2`,
     [requestedCompanyId, token.userId],
@@ -160,8 +160,8 @@ const companyScope = async (request: FastifyRequest, reply: FastifyReply, allowE
     return null
   }
   const membership = rows[0]
-  const trialExpired = membership.billing_status === 'trial' && membership.trial_ends_at !== null && new Date(membership.trial_ends_at).getTime() <= Date.now()
-  const accessState = membership.billing_status === 'active' || membership.role === 'otimiza_admin' ? 'active' : trialExpired || membership.billing_status === 'expired' ? 'expired' : 'trial'
+  // O acesso liberado à mão pela equipe (mensal, anual ou vitalício) vale mais que o status de cobrança e vence na data.
+  const accessState = membership.role === 'otimiza_admin' ? 'active' : accessStateOf({ billingStatus: membership.billing_status, trialEndsAt: membership.trial_ends_at, grantKind: membership.access_grant_kind, grantUntil: membership.access_grant_until })
   if (!allowExpired && accessState === 'expired') {
     reply.code(402).send({ error: 'Seu período de teste terminou. Escolha um plano para continuar usando o CRM.', code: 'TRIAL_EXPIRED' })
     return null
@@ -285,11 +285,13 @@ type SubscriptionRow = {
   id: string; name: string; plan: string; channel_limit: number; plan_price_cents: number; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null; created_at: string
   owner_name: string | null; owner_email: string | null; sub_status: string | null; billing_type: string | null; cycle: string | null; auto_renew: boolean | null; next_due_date: string | null
   card_brand: string | null; card_last4: string | null; asaas_subscription_id: string | null
+  grant_kind: string | null; grant_until: string | null; grant_note: string | null
   last_value_cents: number | null; last_payment_status: string | null; last_paid_at: string | null; last_due_date: string | null; largest_paid_cents: number | null; total_paid_cents: string | null
 }
 
 const subscriptionRows = (companyId?: string) => query<SubscriptionRow>(
   `SELECT c.id, c.name, c.plan, c.channel_limit, c.plan_price_cents, c.billing_status, c.trial_ends_at, c.created_at,
+     c.access_grant_kind AS grant_kind, c.access_grant_until AS grant_until, c.access_grant_note AS grant_note,
      o.name AS owner_name, o.email AS owner_email,
      bs.status AS sub_status, bs.billing_type, bs.cycle, bs.auto_renew, bs.next_due_date, bs.card_brand, bs.card_last4, bs.asaas_subscription_id,
      lp.value_cents AS last_value_cents, lp.status AS last_payment_status, lp.paid_at AS last_paid_at, lp.due_date AS last_due_date,
@@ -305,8 +307,13 @@ const subscriptionRows = (companyId?: string) => query<SubscriptionRow>(
 )
 
 const subscriptionView = (row: SubscriptionRow) => {
-  const facts = { billingStatus: row.billing_status, trialEndsAt: row.trial_ends_at, subscriptionStatus: row.sub_status, cycle: row.cycle, planPriceCents: row.plan_price_cents, largestPaidCents: row.largest_paid_cents, lastPaymentStatus: row.last_payment_status }
+  const facts = { billingStatus: row.billing_status, trialEndsAt: row.trial_ends_at, subscriptionStatus: row.sub_status, cycle: row.cycle, planPriceCents: row.plan_price_cents, largestPaidCents: row.largest_paid_cents, lastPaymentStatus: row.last_payment_status, grantKind: row.grant_kind, grantUntil: row.grant_until }
+  const granted = Boolean(row.grant_kind)
   return {
+    // Acesso liberado à mão: tipo, fim, se ainda vale e a anotação. Nulo quando a empresa só tem teste ou assinatura paga.
+    granted, grant: granted ? { kind: row.grant_kind, until: row.grant_until, active: grantIsActive(row.grant_kind, row.grant_until), daysLeft: row.grant_kind === 'lifetime' ? null : daysLeft(row.grant_until), note: row.grant_note } : null,
+    // Assinatura paga em andamento: o acesso manual só entra depois de cancelá-la, para não cobrar e dar acesso grátis ao mesmo tempo.
+    hasPaidSubscription: !granted && row.sub_status !== null && row.sub_status !== 'canceled' && row.billing_status === 'active',
     companyId: row.id, company: row.name, ownerName: row.owner_name, ownerEmail: row.owner_email,
     plan: row.plan, channelLimit: row.channel_limit, priceCents: row.plan_price_cents,
     state: stateOf(facts), cycle: cycleOf(facts), monthlyCents: monthlyEquivalentCents(facts),
@@ -315,7 +322,7 @@ const subscriptionView = (row: SubscriptionRow) => {
     billingType: row.billing_type, autoRenew: row.auto_renew ?? false, nextDueDate: row.next_due_date,
     card: row.card_last4 ? { brand: row.card_brand, last4: row.card_last4 } : null,
     lastPayment: row.last_payment_status ? { valueCents: row.last_value_cents, status: row.last_payment_status, paidAt: row.last_paid_at, dueDate: row.last_due_date } : null,
-    totalPaidCents: Number(row.total_paid_cents ?? 0), canCancel: row.sub_status !== 'canceled' && (row.billing_status === 'active' || row.sub_status !== null),
+    totalPaidCents: Number(row.total_paid_cents ?? 0), canCancel: !granted && row.sub_status !== 'canceled' && (row.billing_status === 'active' || row.sub_status !== null),
     createdAt: row.created_at,
   }
 }
@@ -333,8 +340,11 @@ app.get('/api/admin/subscriptions', { preHandler: authenticate }, async (request
   const recurring = items.reduce((sum, item) => sum + item.monthlyCents, 0)
   return {
     totals: {
-      companies: items.length, trial: count('trial'), trialExpired: count('trial_expired'), active: count('active'), overdue: count('overdue'), canceled: count('canceled'),
-      annual: items.filter((item) => item.cycle === 'annual' && (item.state === 'active' || item.state === 'overdue')).length,
+      companies: items.length, trial: count('trial'), trialExpired: count('trial_expired'), active: count('active'), overdue: count('overdue'), canceled: count('canceled'), expired: count('expired'),
+      // "Anuais" são os pagos; o acesso liberado à mão aparece à parte (liberados, vitalícios).
+      annual: items.filter((item) => item.cycle === 'annual' && !item.granted && (item.state === 'active' || item.state === 'overdue')).length,
+      granted: items.filter((item) => item.granted && item.state === 'active').length,
+      lifetime: items.filter((item) => item.cycle === 'lifetime').length,
       monthlyRecurringCents: recurring, totalPaidCents: items.reduce((sum, item) => sum + item.totalPaidCents, 0),
     },
     items,
@@ -381,6 +391,31 @@ app.post('/api/admin/companies/:companyId/cancel', { preHandler: authenticate, c
   return subscriptionView((await subscriptionRows(current.id)).rows[0])
 })
 
+// Libera, estende ou revoga o acesso de uma empresa à mão: +7 dias de teste, acesso mensal, anual, vitalício ou revogar.
+// O acesso manual não passa pelo Asaas e não conta como receita. Cada ação fica na trilha de auditoria.
+app.post('/api/admin/companies/:companyId/access', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ companyId: z.string().uuid() }).safeParse(request.params)
+  const body = z.object({ action: z.enum(accessActions as [string, ...string[]]), note: z.string().trim().max(300).optional() }).safeParse(request.body)
+  if (!params.success || !body.success) return reply.code(400).send({ error: 'Escolha o tipo de acesso a liberar.' })
+  const current = (await subscriptionRows(params.data.companyId)).rows[0]
+  if (!current) return reply.code(404).send({ error: 'Empresa não encontrada.' })
+  const view = subscriptionView(current)
+  if (view.hasPaidSubscription) return reply.code(409).send({ error: 'Esta empresa tem uma assinatura paga ativa. Cancele a assinatura antes de liberar acesso manual.' })
+  const result = applyAccess(body.data.action as (typeof accessActions)[number], { billingStatus: current.billing_status, trialEndsAt: current.trial_ends_at, grantKind: current.grant_kind, grantUntil: current.grant_until })
+  if (!result.ok) return reply.code(409).send({ error: result.error })
+  const revoke = body.data.action === 'revoke'
+  await query(
+    `UPDATE companies SET billing_status = $2, trial_ends_at = $3, access_grant_kind = $4, access_grant_until = $5,
+       access_grant_note = $6, access_granted_at = CASE WHEN $4::text IS NULL THEN NULL ELSE now() END, updated_at = now()
+     WHERE id = $1`,
+    [current.id, result.billingStatus, result.trialEndsAt, result.grantKind, result.grantUntil, revoke ? null : body.data.note ?? null],
+  )
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, $2, $3, $4::jsonb)', [scope.userId, current.id, `access.${body.data.action}`, JSON.stringify({ kind: result.grantKind, until: result.grantUntil, trialEndsAt: result.trialEndsAt, note: body.data.note ?? null })])
+  return subscriptionView((await subscriptionRows(current.id)).rows[0])
+})
+
 // Lista de clientes para escolher qual chatbot ou qual tráfego abrir. Sem nenhum dado financeiro.
 app.get('/api/admin/companies', { preHandler: authenticate }, async (request, reply) => {
   if (!await adminScope(request, reply, ['master', 'traffic'])) return
@@ -421,6 +456,47 @@ app.get('/api/admin/traffic', { preHandler: authenticate }, async (request, repl
      ORDER BY COALESCE(m.spend, 0) DESC, lower(c.name)`, [parsed.data.days],
   )
   return { days: parsed.data.days, items: rows }
+})
+
+// ───────── Equipe da Otimiza: quem é administrador (master) e quem é gestor de tráfego ─────────
+const teamMember = (row: { id: string; name: string; email: string; platform_role: string | null; created_at: string; company_name: string | null }) =>
+  ({ userId: row.id, name: row.name, email: row.email, role: isPlatformRole(row.platform_role) ? row.platform_role : null, createdAt: row.created_at, companyName: row.company_name })
+const teamColumns = `u.id, u.name, u.email, u.platform_role, u.created_at,
+  (SELECT c.name FROM memberships m JOIN companies c ON c.id = m.company_id WHERE m.user_id = u.id ORDER BY m.created_at LIMIT 1) AS company_name`
+
+app.get('/api/admin/team', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const { rows } = await query<Parameters<typeof teamMember>[0]>(`SELECT ${teamColumns} FROM users u WHERE u.platform_role IS NOT NULL ORDER BY (u.platform_role = 'master') DESC, lower(u.name)`)
+  return rows.map(teamMember)
+})
+
+// Procura uma pessoa que já criou conta no CRM, para dar a ela um papel na equipe.
+app.get('/api/admin/team/search', { preHandler: authenticate, config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const parsed = z.object({ q: z.string().trim().min(3).max(120) }).safeParse(request.query)
+  if (!parsed.success) return reply.code(400).send({ error: 'Digite pelo menos 3 letras do nome ou do e-mail.' })
+  const { rows } = await query<Parameters<typeof teamMember>[0]>(
+    `SELECT ${teamColumns} FROM users u WHERE lower(u.email) LIKE $1 OR lower(u.name) LIKE $1 ORDER BY lower(u.name) LIMIT 10`, [`%${parsed.data.q.toLowerCase().replace(/[%_\\]/g, (char) => `\\${char}`)}%`],
+  )
+  return rows.map(teamMember)
+})
+
+app.put('/api/admin/team/:userId/role', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 hour' }, logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ userId: z.string().uuid() }).safeParse(request.params)
+  const body = z.object({ role: z.enum(['master', 'traffic', 'none']) }).safeParse(request.body)
+  if (!params.success || !body.success) return reply.code(400).send({ error: 'Escolha o papel da pessoa: administrador, gestor de tráfego ou nenhum.' })
+  const target = (await query<Parameters<typeof teamMember>[0]>(`SELECT ${teamColumns} FROM users u WHERE u.id = $1`, [params.data.userId])).rows[0]
+  if (!target) return reply.code(404).send({ error: 'Pessoa não encontrada.' })
+  const nextRole: PlatformRole | null = body.data.role === 'none' ? null : body.data.role
+  const currentRole = isPlatformRole(target.platform_role) ? target.platform_role : null
+  const masters = Number((await query<{ total: string }>(`SELECT count(*)::text AS total FROM users WHERE platform_role = 'master'`)).rows[0]?.total ?? 0)
+  const check = checkRoleChange({ actorId: scope.userId, targetId: target.id, currentRole, nextRole, masterCount: masters })
+  if (!check.ok) return reply.code(409).send({ error: check.error })
+  await query('UPDATE users SET platform_role = $2, updated_at = now() WHERE id = $1', [target.id, nextRole])
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, 'team.role', JSON.stringify({ email: target.email, from: currentRole, to: nextRole })])
+  return teamMember({ ...target, platform_role: nextRole })
 })
 
 app.get('/api/admin/audit', { preHandler: authenticate }, async (request, reply) => {
@@ -2195,7 +2271,8 @@ app.post('/webhooks/asaas', { config: { logLevel: 'warn' } }, async (request, re
   const expectedCents = subscriptionRow.rows[0]?.price_cents ?? 0
 
   if (effect === 'activate' && valueCents >= expectedCents) {
-    await query(`UPDATE companies SET billing_status = 'active', updated_at = now() WHERE id = $1`, [companyId])
+    // Pagou pelo Asaas: o acesso passa a depender da assinatura, então o acesso liberado à mão (se havia) deixa de valer.
+    await query(`UPDATE companies SET billing_status = 'active', access_grant_kind = NULL, access_grant_until = NULL, access_grant_note = NULL, access_granted_at = NULL, updated_at = now() WHERE id = $1`, [companyId])
     await query(
       `UPDATE billing_subscriptions SET status = 'active', last_payment_id = $2, last_event_at = now(), failed_attempts = 0, locked_until = NULL, updated_at = now() WHERE company_id = $1`,
       [companyId, paymentId],

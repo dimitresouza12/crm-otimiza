@@ -46,10 +46,10 @@ import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 import { BillingCheckout } from './BillingCheckout'
-import { AdminChatbotPage, AdminSubscriptionsPage, AdminTrafficPage, TrafficAccessCard } from './AdminPanel'
+import { AdminChatbotPage, AdminSubscriptionsPage, AdminTeamPage, AdminTrafficPage, TrafficAccessCard } from './AdminPanel'
 import { connectEvents, onChatEvent } from './lib/events'
 
-type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes' | 'admin_assinaturas' | 'admin_chatbot' | 'admin_trafego'
+type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes' | 'admin_assinaturas' | 'admin_equipe' | 'admin_chatbot' | 'admin_trafego'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
 type Channel = 'Todos os canais' | 'Comercial' | 'Unidade Aldeota' | 'Pós-venda'
 
@@ -217,7 +217,7 @@ const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot
 const adminNavFor = (role: 'master' | 'traffic' | null | undefined): typeof navItems => {
   if (!role) return []
   const items: typeof navItems = []
-  if (role === 'master') items.push({ id: 'admin_assinaturas', label: 'Assinaturas', icon: Wallet })
+  if (role === 'master') items.push({ id: 'admin_assinaturas', label: 'Assinaturas', icon: Wallet }, { id: 'admin_equipe', label: 'Equipe', icon: UsersRound })
   items.push({ id: 'admin_chatbot', label: 'Chatbot dos clientes', icon: Bot }, { id: 'admin_trafego', label: 'Gestão de tráfego', icon: Megaphone })
   return items
 }
@@ -1300,6 +1300,7 @@ export default function App() {
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} onTrafficAccessChange={(value) => setAccount((current) => current && { ...current, traffic_access_granted_at: value })} />
     if (page === 'admin_assinaturas' && account?.platform_role === 'master') return <AdminSubscriptionsPage session={session!}/>
+    if (page === 'admin_equipe' && account?.platform_role === 'master') return <AdminTeamPage session={session!}/>
     if (page === 'admin_chatbot' && account?.platform_role) return <AdminChatbotPage session={session!}/>
     if (page === 'admin_trafego' && account?.platform_role) return <AdminTrafficPage session={session!} renderCampaigns={(scoped) => <TrafficPage session={scoped}/>}/>
     if (page === 'trafego') return <TrafficPage session={session!}/>
