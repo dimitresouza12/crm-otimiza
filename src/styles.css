@@ -831,6 +831,7 @@ body:has(.trial-page) { overflow: auto; }
 .adm-table th { padding: 11px 16px; color: #6f7788; text-align: left; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; background: #fafbfd; }
 .adm-table td { padding: 13px 16px; color: #2c3345; vertical-align: middle; border-top: 1px solid #edeff5; }
 .adm-table td b { display: block; font-weight: 600; font-variant-numeric: tabular-nums; }
+.adm-rowbtn b .adm-badge { margin-left: 8px; padding: 1px 7px; font-size: 10px; vertical-align: middle; }
 .adm-meter { display: block; width: 84px; height: 4px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: #e9e8fb; }
 .adm-meter i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7669ef, #5b54e6); }
 

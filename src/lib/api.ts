@@ -131,7 +131,7 @@ export type AdminAccessAction = 'trial_plus_7' | 'monthly' | 'annual' | 'lifetim
 export type AdminSubscription = {
   companyId: string; company: string; ownerName: string | null; ownerEmail: string | null; plan: string; channelLimit: number; priceCents: number
   state: 'trial' | 'trial_expired' | 'active' | 'overdue' | 'canceled' | 'expired'; cycle: 'trial' | 'monthly' | 'annual' | 'lifetime'; monthlyCents: number; annualCents: number | null
-  granted: boolean; grant: { kind: 'monthly' | 'annual' | 'lifetime'; until: string | null; active: boolean; daysLeft: number | null; note: string | null } | null; hasPaidSubscription: boolean
+  staff: boolean; granted: boolean; grant: { kind: 'monthly' | 'annual' | 'lifetime'; until: string | null; active: boolean; daysLeft: number | null; note: string | null } | null; hasPaidSubscription: boolean
   trialEndsAt: string | null; trialDaysLeft: number | null; billingType: string | null; autoRenew: boolean; nextDueDate: string | null
   card: { brand: string | null; last4: string } | null; lastPayment: { valueCents: number | null; status: string; paidAt: string | null; dueDate: string | null } | null
   totalPaidCents: number; canCancel: boolean; createdAt: string

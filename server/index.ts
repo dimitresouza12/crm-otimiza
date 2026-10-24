@@ -285,13 +285,15 @@ type SubscriptionRow = {
   id: string; name: string; plan: string; channel_limit: number; plan_price_cents: number; billing_status: 'trial' | 'active' | 'expired'; trial_ends_at: string | null; created_at: string
   owner_name: string | null; owner_email: string | null; sub_status: string | null; billing_type: string | null; cycle: string | null; auto_renew: boolean | null; next_due_date: string | null
   card_brand: string | null; card_last4: string | null; asaas_subscription_id: string | null
-  grant_kind: string | null; grant_until: string | null; grant_note: string | null
+  grant_kind: string | null; grant_until: string | null; grant_note: string | null; has_staff: boolean
   last_value_cents: number | null; last_payment_status: string | null; last_paid_at: string | null; last_due_date: string | null; largest_paid_cents: number | null; total_paid_cents: string | null
 }
 
 const subscriptionRows = (companyId?: string) => query<SubscriptionRow>(
   `SELECT c.id, c.name, c.plan, c.channel_limit, c.plan_price_cents, c.billing_status, c.trial_ends_at, c.created_at,
      c.access_grant_kind AS grant_kind, c.access_grant_until AS grant_until, c.access_grant_note AS grant_note,
+     -- Empresa de alguém da equipe (administrador ou gestor de tráfego): aparece na lista, com uma etiqueta, para o acesso poder ser liberado.
+     EXISTS (SELECT 1 FROM memberships mm JOIN users uu ON uu.id = mm.user_id WHERE mm.company_id = c.id AND uu.platform_role IS NOT NULL) AS has_staff,
      o.name AS owner_name, o.email AS owner_email,
      bs.status AS sub_status, bs.billing_type, bs.cycle, bs.auto_renew, bs.next_due_date, bs.card_brand, bs.card_last4, bs.asaas_subscription_id,
      lp.value_cents AS last_value_cents, lp.status AS last_payment_status, lp.paid_at AS last_paid_at, lp.due_date AS last_due_date,
@@ -302,7 +304,6 @@ const subscriptionRows = (companyId?: string) => query<SubscriptionRow>(
    LEFT JOIN LATERAL (SELECT value_cents, status, paid_at, due_date FROM billing_payments WHERE company_id = c.id ORDER BY COALESCE(paid_at, due_date::timestamptz) DESC NULLS LAST, created_at DESC LIMIT 1) lp ON true
    LEFT JOIN LATERAL (SELECT max(value_cents) AS largest_paid_cents, sum(value_cents) AS total_paid_cents FROM billing_payments WHERE company_id = c.id AND status IN (${PAID_STATUSES})) pm ON true
    WHERE ($1::uuid IS NULL OR c.id = $1)
-     AND NOT EXISTS (SELECT 1 FROM memberships mm JOIN users uu ON uu.id = mm.user_id WHERE mm.company_id = c.id AND uu.platform_role IS NOT NULL)
    ORDER BY c.created_at DESC`, [companyId ?? null],
 )
 
@@ -311,7 +312,7 @@ const subscriptionView = (row: SubscriptionRow) => {
   const granted = Boolean(row.grant_kind)
   return {
     // Acesso liberado à mão: tipo, fim, se ainda vale e a anotação. Nulo quando a empresa só tem teste ou assinatura paga.
-    granted, grant: granted ? { kind: row.grant_kind, until: row.grant_until, active: grantIsActive(row.grant_kind, row.grant_until), daysLeft: row.grant_kind === 'lifetime' ? null : daysLeft(row.grant_until), note: row.grant_note } : null,
+    staff: row.has_staff, granted, grant: granted ? { kind: row.grant_kind, until: row.grant_until, active: grantIsActive(row.grant_kind, row.grant_until), daysLeft: row.grant_kind === 'lifetime' ? null : daysLeft(row.grant_until), note: row.grant_note } : null,
     // Assinatura paga em andamento: o acesso manual só entra depois de cancelá-la, para não cobrar e dar acesso grátis ao mesmo tempo.
     hasPaidSubscription: !granted && row.sub_status !== null && row.sub_status !== 'canceled' && row.billing_status === 'active',
     companyId: row.id, company: row.name, ownerName: row.owner_name, ownerEmail: row.owner_email,

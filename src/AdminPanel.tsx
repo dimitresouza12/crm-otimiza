@@ -112,7 +112,7 @@ export function AdminSubscriptionsPage({ session }: { session: Session }) {
         {rows.length ? <table className="adm-table">
           <thead><tr><th scope="col">Cliente</th><th scope="col">Plano</th><th scope="col">Situação</th><th scope="col">Ciclo</th><th scope="col">Valor</th><th scope="col">Teste / próxima cobrança</th><th scope="col">Último pagamento</th></tr></thead>
           <tbody>{rows.map((item) => <tr key={item.companyId} className={openId === item.companyId ? 'is-open' : ''}>
-            <td data-label="Cliente"><button type="button" className="adm-rowbtn" onClick={() => setOpenId(item.companyId)} aria-label={`Abrir detalhes de ${item.company}`}><b>{item.company}</b><small>{item.ownerEmail ?? 'sem titular'}</small></button></td>
+            <td data-label="Cliente"><button type="button" className="adm-rowbtn" onClick={() => setOpenId(item.companyId)} aria-label={`Abrir detalhes de ${item.company}`}><b>{item.company}{item.staff && <StatusBadge tone="info">Equipe</StatusBadge>}</b><small>{item.ownerEmail ?? 'sem titular'}</small></button></td>
             <td data-label="Plano"><b>{planLabel(item.plan)}</b><small>{item.channelLimit} {item.channelLimit === 1 ? 'número' : 'números'}</small></td>
             <td data-label="Situação"><StatusBadge tone={stateTone(item.state)}>{stateLabel[item.state]}</StatusBadge></td>
             <td data-label="Ciclo">{cycleLabel[item.cycle]}</td>
@@ -215,7 +215,7 @@ function SubscriptionDrawer({ session, item, onClose, onChanged, onReload }: { s
         <button type="button" className="adm-iconbtn" onClick={onClose} aria-label="Fechar"><X size={18} /></button>
       </header>
       <div className="adm-drawer__body">
-        <div className="adm-status-line"><StatusBadge tone={stateTone(item.state)}>{stateLabel[item.state]}</StatusBadge><StatusBadge tone="muted">{cycleLabel[item.cycle]}</StatusBadge></div>
+        <div className="adm-status-line"><StatusBadge tone={stateTone(item.state)}>{stateLabel[item.state]}</StatusBadge><StatusBadge tone="muted">{cycleLabel[item.cycle]}</StatusBadge>{item.staff && <StatusBadge tone="info">Conta de alguém da equipe</StatusBadge>}</div>
         <dl className="adm-facts">
           <div><dt>Plano</dt><dd>{planLabel(item.plan)} · {item.channelLimit} {item.channelLimit === 1 ? 'número' : 'números'}</dd></div>
           <div><dt>{item.cycle === 'annual' ? 'Valor anual' : 'Valor mensal'}</dt><dd>{item.cycle === 'annual' ? `${brlCents(item.annualCents ?? item.monthlyCents * 12)} (${brlCents(item.monthlyCents)}/mês)` : brlCents(item.priceCents)}</dd></div>
