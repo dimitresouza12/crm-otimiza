@@ -37,6 +37,44 @@ function Badge({ tone, children }: { tone: 'ok' | 'bad' | 'wait' | 'info' | 'mut
   return <span className={`adm-badge adm-badge--${tone}`}>{children}</span>
 }
 
+// Mesmos preços da página de planos: a comissão é 50% da mensalidade, com os números extras incluídos.
+const affiliatePlans = { crm: { name: 'Otimiza CRM', base: 8_990, extra: 2_990 }, chatbot: { name: 'CRM + Chatbot', base: 17_990, extra: 3_990 } } as const
+type AffiliatePlan = keyof typeof affiliatePlans
+const priceOf = (plan: AffiliatePlan, numbers: number) => affiliatePlans[plan].base + (numbers - 1) * affiliatePlans[plan].extra
+const earnOf = (plan: AffiliatePlan, numbers: number) => Math.round(priceOf(plan, numbers) * 0.5)
+
+function EarningsCalculator() {
+  const [plan, setPlan] = useState<AffiliatePlan>('chatbot')
+  const [numbers, setNumbers] = useState(1)
+  return <section className="aff-section aff-calc" aria-labelledby="aff-calc-titulo">
+    <div className="aff-calc__intro"><h2 id="aff-calc-titulo">Quanto você ganha por venda</h2><p className="aff-muted">A comissão é 50% da mensalidade do cliente. Se ele contratar mais números de WhatsApp, a sua comissão aumenta junto.</p></div>
+    <div className="aff-calc__grid">
+      <div className="aff-card aff-calc__controls">
+        <div role="radiogroup" aria-label="Plano do cliente" className="aff-seg">
+          {(Object.keys(affiliatePlans) as AffiliatePlan[]).map((id) => <button key={id} type="button" role="radio" aria-checked={plan === id} className={plan === id ? 'is-on' : ''} onClick={() => setPlan(id)}><b>{affiliatePlans[id].name}</b><small>a partir de {brl(affiliatePlans[id].base)}/mês</small></button>)}
+        </div>
+        <div role="radiogroup" aria-label="Quantidade de números de WhatsApp" className="aff-nums">
+          <span>Números de WhatsApp do cliente</span>
+          <div>{[1, 2, 3, 4, 5].map((count) => <button key={count} type="button" role="radio" aria-checked={numbers === count} className={numbers === count ? 'is-on' : ''} onClick={() => setNumbers(count)}>{count}</button>)}</div>
+        </div>
+      </div>
+      <div className="aff-calc__result" aria-live="polite">
+        <small>Cliente paga {brl(priceOf(plan, numbers))}/mês</small>
+        <span>Você ganha</span>
+        <b>{brl(earnOf(plan, numbers))}</b>
+        <em>50% da primeira mensalidade · pago uma vez por cliente</em>
+      </div>
+    </div>
+    <div className="aff-table-wrap">
+      <table className="aff-table">
+        <caption className="sr-only">Comissão por plano e quantidade de números</caption>
+        <thead><tr><th scope="col">Plano</th>{[1, 2, 3, 4, 5].map((count) => <th key={count} scope="col">{count} {count === 1 ? 'número' : 'números'}</th>)}</tr></thead>
+        <tbody>{(Object.keys(affiliatePlans) as AffiliatePlan[]).map((id) => <tr key={id}><th scope="row">{affiliatePlans[id].name}</th>{[1, 2, 3, 4, 5].map((count) => <td key={count} className={plan === id && numbers === count ? 'is-on' : ''}>{brl(earnOf(id, count))}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  </section>
+}
+
 // ───────────────────────── Página pública: proposta + cadastro / entrada ─────────────────────────
 function AffiliateLanding({ onAuthenticated, onNavigate }: { onAuthenticated: (auth: AffiliateAuth) => void; onNavigate: (path: string) => void }) {
   const [mode, setMode] = useState<'register' | 'login'>('register')
@@ -65,8 +103,9 @@ function AffiliateLanding({ onAuthenticated, onNavigate }: { onAuthenticated: (a
     <section className="aff-hero">
       <div className="aff-hero__copy">
         <span className="aff-pill"><i /> Programa de afiliados · grátis</span>
-        <h1>Indique o Otimiza CRM e ganhe <em>R$ 89,95</em> por venda.</h1>
-        <p>Qualquer pessoa pode vender. Você recebe um link, compartilha, e ganha <b>50% de uma mensalidade</b> de cada cliente que assinar pelo seu link. Sem custo, sem estoque, sem chefe.</p>
+        <h1>Ganhe <em>50%</em> de cada venda do Otimiza CRM.</h1>
+        <p>Qualquer pessoa pode vender. Compartilhe o seu link e receba <b>metade da primeira mensalidade</b> de cada cliente que assinar, no plano CRM ou CRM + Chatbot, com 1 a 5 números de WhatsApp. Quanto maior o plano do cliente, maior a sua comissão.</p>
+        <p className="aff-hero__range"><b>{brl(earnOf('crm', 1))}</b> a <b>{brl(earnOf('chatbot', 5))}</b> por venda</p>
         <ul className="aff-hero__facts">
           <li><BadgeCheck size={16} aria-hidden="true" /> Painel gratuito para acompanhar cada venda</li>
           <li><BadgeCheck size={16} aria-hidden="true" /> Ranking e competições com prêmios</li>
@@ -96,18 +135,16 @@ function AffiliateLanding({ onAuthenticated, onNavigate }: { onAuthenticated: (a
       <ol className="aff-steps">
         <li><span><Link2 size={20} aria-hidden="true" /></span><b>1. Pegue o seu link</b><p>Crie a conta e copie o seu link exclusivo.</p></li>
         <li><span><MessageCircle size={20} aria-hidden="true" /></span><b>2. Compartilhe</b><p>Mande no WhatsApp, redes sociais ou para quem tem um negócio e atende pelo WhatsApp.</p></li>
-        <li><span><Banknote size={20} aria-hidden="true" /></span><b>3. Receba</b><p>Quando o cliente assina, 50% de uma mensalidade vira saldo seu. Você pede o saque quando quiser.</p></li>
+        <li><span><Banknote size={20} aria-hidden="true" /></span><b>3. Receba</b><p>Quando o cliente assina, 50% da primeira mensalidade dele vira saldo seu. Você pede o saque quando quiser.</p></li>
       </ol>
-      <div className="aff-earn" aria-label="Quanto você ganha">
-        <div><small>Plano Chatbot · R$ 179,90/mês</small><b>R$ 89,95</b><span>por venda</span></div>
-        <div><small>Plano CRM · R$ 89,90/mês</small><b>R$ 44,95</b><span>por venda</span></div>
-      </div>
     </section>
+
+    <EarningsCalculator />
 
     <section className="aff-section aff-rules" id="aff-regras" aria-labelledby="aff-regras-titulo">
       <h2 id="aff-regras-titulo">Regras do programa</h2>
       <ul>
-        <li>A comissão é de <b>50% de uma mensalidade</b> do plano contratado, paga <b>uma única vez</b> por cliente (na primeira assinatura). Se o cliente pagar o ano à vista, a comissão continua sendo de uma mensalidade.</li>
+        <li>A comissão é de <b>50% da primeira mensalidade</b> do cliente, já contando o plano escolhido e os números de WhatsApp extras, e é paga <b>uma única vez</b> por cliente. Se o cliente pagar o ano à vista, a comissão continua sendo de uma mensalidade.</li>
         <li>A comissão só nasce quando o <b>pagamento é confirmado</b> e fica <b>30 dias</b> em análise antes de virar saldo disponível. Estorno ou chargeback cancelam a comissão.</li>
         <li>O saque é pedido no painel e pago por <b>Pix</b> pela equipe da Otimiza, na chave que você cadastrar.</li>
         <li>Não vale indicar a si mesmo, nem divulgar com spam ou informação falsa. A equipe pode cancelar comissões suspeitas e bloquear a conta.</li>
