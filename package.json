@@ -21,7 +21,7 @@
     "test:bot": "node --import tsx --test server/chatbot-logic.test.ts",
     "test:billing": "node --import tsx --test server/asaas.test.ts server/card-checkout.test.ts server/document.test.ts",
     "test:admin": "node --import tsx --test server/platform-admin.test.ts",
-    "test:admin": "node --import tsx --test server/platform-admin.test.ts"
+    "test:affiliates": "node --import tsx --test server/affiliates.test.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

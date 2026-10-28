@@ -13,6 +13,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { config } from './config.js'
 import { decryptSecret, encryptSecret } from './crypto.js'
+import { availableAtFor, balanceOf, canRequestPayout, commissionEffectFor, commissionFor, isValidCode, isValidNickname, maskCompanyName, maskPixKey, normalizePixKey, pixKeyTypes, rankingOf, slugifyCode, type PixKeyType } from './affiliates.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
 import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
@@ -193,6 +194,7 @@ const registerSchema = z.object({
   usesOtimizaAutomation: z.boolean().optional(),
   plan: z.enum(['crm', 'chatbot']).default('crm'),
   channelLimit: z.coerce.number().int().min(1).max(5).default(1),
+  ref: z.string().trim().toLowerCase().max(40).optional(),
 })
 
 app.get('/api/public/config', async () => ({ salesWhatsapp: config.salesWhatsapp, asaasEnabled: asaasConfigured() }))
@@ -212,22 +214,39 @@ app.post('/api/auth/register', { config: { rateLimit: { max: 5, timeWindow: '1 h
   const companyBaseSlug = slugify(input.companyName) || 'empresa'
   try {
     const result = await transaction(async (client) => {
-      const existing = await client.query('SELECT id FROM users WHERE email = $1', [input.email])
-      if (existing.rowCount) throw new Error('EMAIL_EXISTS')
+      const existing = await client.query<{ id: string; password_hash: string; memberships: string }>(
+        'SELECT u.id, u.password_hash, (SELECT count(*) FROM memberships m WHERE m.user_id = u.id)::text AS memberships FROM users u WHERE u.email = $1', [input.email],
+      )
+      // Quem já é afiliado (usuário sem empresa) pode abrir a empresa no CRM com o mesmo e-mail, provando a senha.
+      const affiliateUser = existing.rows[0] && existing.rows[0].memberships === '0' ? existing.rows[0] : null
+      if (existing.rowCount && !affiliateUser) throw new Error('EMAIL_EXISTS')
+      if (affiliateUser && !(await bcrypt.compare(input.password, affiliateUser.password_hash))) throw new Error('EMAIL_AFFILIATE')
       const company = await client.query<{ id: string }>(
         `INSERT INTO companies (name, slug, plan, channel_limit, plan_price_cents, trial_ends_at, billing_status, onboarding)
          VALUES ($1, $2 || '-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 6), $3, $4, $5, now() + interval '7 days', 'trial', $6::jsonb)
          RETURNING id`,
         [input.companyName, companyBaseSlug, input.plan, input.channelLimit, planPriceCents, JSON.stringify({ segment: input.segment, objective: input.objective, usesOtimizaAutomation: input.usesOtimizaAutomation ?? false, selectedPlan: input.plan, selectedChannelLimit: input.channelLimit, presentedPriceCents: planPriceCents })],
       )
-      const user = await client.query<{ id: string }>('INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id', [input.name, input.email, passwordHash])
+      const user = affiliateUser
+        ? { rows: [{ id: affiliateUser.id }] }
+        : await client.query<{ id: string }>('INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id', [input.name, input.email, passwordHash])
       await client.query('INSERT INTO memberships (company_id, user_id, role) VALUES ($1, $2, $3)', [company.rows[0].id, user.rows[0].id, 'owner'])
+      // Indicação por afiliado: vale o código ativo; a autoindicação (o próprio afiliado criando a conta) é ignorada.
+      if (input.ref) {
+        await client.query(
+          `UPDATE companies SET referred_by_affiliate_id = a.id, referred_at = now()
+           FROM affiliates a WHERE companies.id = $1 AND a.code = $2 AND a.status = 'active' AND a.user_id <> $3
+             AND NOT EXISTS (SELECT 1 FROM users au WHERE au.id = a.user_id AND au.email = $4)`,
+          [company.rows[0].id, input.ref, user.rows[0].id, input.email],
+        )
+      }
       return { companyId: company.rows[0].id, userId: user.rows[0].id }
     })
     await defaultPipeline(result.companyId)
     return reply.code(201).send({ token: tokenFor(result.userId, result.companyId, 'owner'), companyId: result.companyId, trialEndsAt: new Date(Date.now() + 7 * 86_400_000).toISOString() })
   } catch (error) {
     if (error instanceof Error && error.message === 'EMAIL_EXISTS') return reply.code(409).send({ error: 'Este e-mail já possui uma conta.' })
+    if (error instanceof Error && error.message === 'EMAIL_AFFILIATE') return reply.code(409).send({ error: 'Este e-mail já é de uma conta de afiliado. Use a mesma senha dela para abrir a empresa no CRM, ou outro e-mail.' })
     throw error
   }
 })
@@ -242,6 +261,191 @@ app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '15 mi
   const account = rows[0]
   if (!account || !(await bcrypt.compare(parsed.data.password, account.password_hash))) return reply.code(401).send({ error: 'E-mail ou senha incorretos.' })
   return { token: tokenFor(account.id, account.company_id, account.role), companyId: account.company_id, role: account.role }
+})
+
+// ───────── Programa de afiliados ─────────
+// O afiliado é um usuário sem empresa. O token dele leva role 'affiliate' e o id do afiliado no lugar da empresa,
+// então não abre nenhuma rota do CRM (companyScope exige vínculo com a empresa).
+type AffiliateRow = { id: string; user_id: string; code: string; nickname: string; pix_key_type: PixKeyType | null; pix_key_encrypted: string | null; status: 'active' | 'blocked'; name: string; email: string }
+
+const affiliateScope = async (request: FastifyRequest, reply: FastifyReply) => {
+  const token = currentToken(request)
+  const row = token.role === 'affiliate'
+    ? (await query<AffiliateRow>(`SELECT a.id, a.user_id, a.code, a.nickname, a.pix_key_type, a.pix_key_encrypted, a.status, u.name, u.email FROM affiliates a JOIN users u ON u.id = a.user_id WHERE a.id = $1 AND a.user_id = $2`, [token.companyId, token.userId])).rows[0]
+    : undefined
+  if (!row) { reply.code(403).send({ error: 'Acesso restrito a afiliados.' }); return null }
+  return row
+}
+
+const affiliateLink = (code: string) => `${config.crmPublicUrl || 'https://crm.otimizai.net.br'}/?ref=${code}`
+
+const uniqueAffiliateCode = async (nickname: string) => {
+  let base = slugifyCode(nickname)
+  if (base.length < 3) base = `${base}afil`.slice(0, 20)
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = attempt === 0 ? base : `${base.slice(0, 18)}${Math.floor(Math.random() * 900 + 100)}`
+    if (isValidCode(code) && !(await query('SELECT 1 FROM affiliates WHERE code = $1', [code])).rowCount) return code
+  }
+  throw new Error('AFFILIATE_CODE_UNAVAILABLE')
+}
+
+const affiliateRegisterSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  email: z.string().email().max(160).transform((value) => value.toLowerCase()),
+  password: z.string().min(8).max(100),
+  nickname: z.string().trim().refine(isValidNickname, 'Escolha um apelido de 3 a 24 letras ou números.'),
+  acceptTerms: z.literal(true, { message: 'É preciso aceitar as regras do programa.' }),
+})
+
+app.post('/api/affiliate/register', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const parsed = affiliateRegisterSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Confira os dados do cadastro.' })
+  const input = parsed.data
+  try {
+    const result = await transaction(async (client) => {
+      const existing = await client.query<{ id: string; password_hash: string }>('SELECT id, password_hash FROM users WHERE email = $1', [input.email])
+      let userId = existing.rows[0]?.id
+      if (userId) {
+        // Quem já tem conta (cliente do CRM, por exemplo) ativa o programa provando a senha.
+        if (!(await bcrypt.compare(input.password, existing.rows[0].password_hash))) throw new Error('EMAIL_EXISTS')
+        if ((await client.query('SELECT 1 FROM affiliates WHERE user_id = $1', [userId])).rowCount) throw new Error('ALREADY_AFFILIATE')
+      } else {
+        userId = (await client.query<{ id: string }>('INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id', [input.name, input.email, await bcrypt.hash(input.password, 12)])).rows[0].id
+      }
+      const code = await uniqueAffiliateCode(input.nickname)
+      const affiliate = await client.query<{ id: string }>('INSERT INTO affiliates (user_id, code, nickname) VALUES ($1, $2, $3) RETURNING id', [userId, code, input.nickname])
+      return { userId, affiliateId: affiliate.rows[0].id, code }
+    })
+    return reply.code(201).send({ token: tokenFor(result.userId, result.affiliateId, 'affiliate'), affiliateId: result.affiliateId, code: result.code, link: affiliateLink(result.code) })
+  } catch (error) {
+    if (error instanceof Error && error.message === 'EMAIL_EXISTS') return reply.code(409).send({ error: 'Este e-mail já tem uma conta. Informe a senha dela para ativar o programa de afiliados.' })
+    if (error instanceof Error && error.message === 'ALREADY_AFFILIATE') return reply.code(409).send({ error: 'Você já é afiliado. Entre com o seu e-mail e senha.' })
+    if (error instanceof Error && error.message === 'AFFILIATE_CODE_UNAVAILABLE') return reply.code(409).send({ error: 'Não conseguimos criar o seu link. Tente outro apelido.' })
+    throw error
+  }
+})
+
+app.post('/api/affiliate/login', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  const parsed = z.object({ email: z.string().email().transform((value) => value.toLowerCase()), password: z.string().min(1) }).safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Informe e-mail e senha.' })
+  const { rows } = await query<{ user_id: string; password_hash: string; affiliate_id: string; code: string }>(
+    `SELECT u.id AS user_id, u.password_hash, a.id AS affiliate_id, a.code FROM users u JOIN affiliates a ON a.user_id = u.id WHERE u.email = $1`, [parsed.data.email],
+  )
+  const account = rows[0]
+  if (!account || !(await bcrypt.compare(parsed.data.password, account.password_hash))) return reply.code(401).send({ error: 'E-mail ou senha incorretos.' })
+  return { token: tokenFor(account.user_id, account.affiliate_id, 'affiliate'), affiliateId: account.affiliate_id, code: account.code, link: affiliateLink(account.code) }
+})
+
+// Clique no link de afiliado: conta no máximo 1 por visitante e dia (o navegador controla), com limite por IP.
+app.post('/api/affiliate/click', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+  const parsed = z.object({ code: z.string().trim().toLowerCase().min(3).max(40) }).safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Código inválido.' })
+  const { rows } = await query<{ id: string }>(`SELECT id FROM affiliates WHERE code = $1 AND status = 'active'`, [parsed.data.code])
+  if (rows[0]) await query(`INSERT INTO affiliate_clicks (affiliate_id, day, clicks) VALUES ($1, current_date, 1) ON CONFLICT (affiliate_id, day) DO UPDATE SET clicks = affiliate_clicks.clicks + 1`, [rows[0].id])
+  return reply.code(204).send()
+})
+
+const payoutView = (row: { id: string; amount_cents: number; status: string; requested_at: string; resolved_at: string | null; note: string | null }) =>
+  ({ id: row.id, amountCents: row.amount_cents, status: row.status, requestedAt: row.requested_at, resolvedAt: row.resolved_at, note: row.note })
+
+app.get('/api/affiliate/me', { preHandler: authenticate }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  const commissions = (await query<{ amount_cents: number; status: 'pending' | 'requested' | 'paid' | 'canceled' | 'reversed_after_payout'; available_at: string; created_at: string }>(
+    'SELECT amount_cents, status, available_at, created_at FROM affiliate_commissions WHERE affiliate_id = $1', [affiliate.id])).rows
+  const funnel = (await query<{ clicks: string; signups: string }>(
+    `SELECT COALESCE((SELECT sum(clicks) FROM affiliate_clicks WHERE affiliate_id = $1), 0)::text AS clicks,
+            (SELECT count(*) FROM companies WHERE referred_by_affiliate_id = $1)::text AS signups`, [affiliate.id])).rows[0]
+  const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0)
+  const counted = commissions.filter((row) => row.status !== 'canceled' && row.status !== 'reversed_after_payout')
+  const openPayout = (await query<{ id: string; amount_cents: number; status: string; requested_at: string; resolved_at: string | null; note: string | null }>(
+    `SELECT id, amount_cents, status, requested_at, resolved_at, note FROM affiliate_payouts WHERE affiliate_id = $1 AND status = 'requested'`, [affiliate.id])).rows[0]
+  return {
+    name: affiliate.name, nickname: affiliate.nickname, email: affiliate.email, code: affiliate.code, link: affiliateLink(affiliate.code), status: affiliate.status,
+    balance: balanceOf(commissions),
+    funnel: { clicks: Number(funnel.clicks), signups: Number(funnel.signups), subscriptions: counted.length, salesThisMonth: counted.filter((row) => new Date(row.created_at) >= monthStart).length },
+    pix: affiliate.pix_key_type && affiliate.pix_key_encrypted ? { type: affiliate.pix_key_type, masked: maskPixKey(affiliate.pix_key_type, decryptSecret(affiliate.pix_key_encrypted)) } : null,
+    openPayout: openPayout ? payoutView(openPayout) : null,
+  }
+})
+
+// Indicações do afiliado: nome da empresa mascarado e a situação, nunca contato ou conversa.
+app.get('/api/affiliate/referrals', { preHandler: authenticate }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  const { rows } = await query<{ name: string; referred_at: string; billing_status: string; trial_ends_at: string | null; amount_cents: number | null; commission_status: string | null; available_at: string | null }>(
+    `SELECT c.name, c.referred_at, c.billing_status, c.trial_ends_at, k.amount_cents, k.status AS commission_status, k.available_at
+     FROM companies c LEFT JOIN affiliate_commissions k ON k.company_id = c.id AND k.affiliate_id = $1
+     WHERE c.referred_by_affiliate_id = $1 ORDER BY c.referred_at DESC LIMIT 200`, [affiliate.id],
+  )
+  return rows.map((row) => ({
+    company: maskCompanyName(row.name), referredAt: row.referred_at,
+    stage: row.commission_status ? (row.commission_status === 'canceled' || row.commission_status === 'reversed_after_payout' ? 'canceled' : 'subscribed') : row.billing_status === 'trial' && row.trial_ends_at && new Date(row.trial_ends_at).getTime() > Date.now() ? 'trial' : 'trial_ended',
+    commissionCents: row.amount_cents, commissionStatus: row.commission_status, availableAt: row.available_at,
+  }))
+})
+
+app.put('/api/affiliate/pix', { preHandler: authenticate, config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  const parsed = z.object({ type: z.enum(pixKeyTypes as [PixKeyType, ...PixKeyType[]]), key: z.string().trim().min(3).max(140) }).safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: 'Escolha o tipo e informe a chave Pix.' })
+  const key = normalizePixKey(parsed.data.type, parsed.data.key)
+  if (!key.ok) return reply.code(400).send({ error: key.error })
+  await query('UPDATE affiliates SET pix_key_encrypted = $2, pix_key_type = $3, updated_at = now() WHERE id = $1', [affiliate.id, encryptSecret(key.value), parsed.data.type])
+  return { type: parsed.data.type, masked: maskPixKey(parsed.data.type, key.value) }
+})
+
+app.get('/api/affiliate/payouts', { preHandler: authenticate }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  const { rows } = await query<{ id: string; amount_cents: number; status: string; requested_at: string; resolved_at: string | null; note: string | null }>(
+    'SELECT id, amount_cents, status, requested_at, resolved_at, note FROM affiliate_payouts WHERE affiliate_id = $1 ORDER BY requested_at DESC LIMIT 50', [affiliate.id])
+  return rows.map(payoutView)
+})
+
+// Pede o saque de tudo que já está disponível. As comissões ficam "em saque" até a equipe pagar ou recusar.
+app.post('/api/affiliate/payouts', { preHandler: authenticate, config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  try {
+    const payout = await transaction(async (client) => {
+      await client.query('SELECT id FROM affiliates WHERE id = $1 FOR UPDATE', [affiliate.id])
+      const available = await client.query<{ id: string; amount_cents: number }>(`SELECT id, amount_cents FROM affiliate_commissions WHERE affiliate_id = $1 AND status = 'pending' AND available_at <= now() FOR UPDATE`, [affiliate.id])
+      const total = available.rows.reduce((sum, row) => sum + row.amount_cents, 0)
+      const open = await client.query(`SELECT 1 FROM affiliate_payouts WHERE affiliate_id = $1 AND status = 'requested'`, [affiliate.id])
+      const check = canRequestPayout({ availableCents: total, hasPixKey: Boolean(affiliate.pix_key_encrypted), hasOpenPayout: Boolean(open.rowCount), blocked: affiliate.status === 'blocked' })
+      if (!check.ok) throw new Error(`PAYOUT:${check.error}`)
+      const created = await client.query<{ id: string; amount_cents: number; status: string; requested_at: string; resolved_at: string | null; note: string | null }>(
+        `INSERT INTO affiliate_payouts (affiliate_id, amount_cents, pix_key_encrypted, pix_key_type) VALUES ($1, $2, $3, $4) RETURNING id, amount_cents, status, requested_at, resolved_at, note`,
+        [affiliate.id, total, affiliate.pix_key_encrypted, affiliate.pix_key_type],
+      )
+      await client.query(`UPDATE affiliate_commissions SET status = 'requested', payout_id = $2, updated_at = now() WHERE id = ANY($1::uuid[])`, [available.rows.map((row) => row.id), created.rows[0].id])
+      return created.rows[0]
+    })
+    return reply.code(201).send(payoutView(payout))
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('PAYOUT:')) return reply.code(409).send({ error: error.message.slice(7) })
+    throw error
+  }
+})
+
+const rankingRows = (from: Date, to: Date | null) => query<{ affiliateId: string; nickname: string; sales: number; amountCents: number }>(
+  `SELECT a.id AS "affiliateId", a.nickname, count(*)::int AS sales, COALESCE(sum(k.amount_cents), 0)::int AS "amountCents"
+   FROM affiliate_commissions k JOIN affiliates a ON a.id = k.affiliate_id
+   WHERE k.status NOT IN ('canceled', 'reversed_after_payout') AND k.created_at >= $1 AND ($2::timestamptz IS NULL OR k.created_at < $2)
+   GROUP BY a.id, a.nickname`, [from, to],
+)
+
+app.get('/api/affiliate/ranking', { preHandler: authenticate }, async (request, reply) => {
+  const affiliate = await affiliateScope(request, reply)
+  if (!affiliate) return
+  const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0)
+  const month = rankingOf((await rankingRows(monthStart, null)).rows, affiliate.id)
+  const campaign = (await query<{ title: string; prize: string | null; starts_on: string; ends_on: string }>(
+    `SELECT title, prize, starts_on::text, ends_on::text FROM affiliate_campaigns WHERE current_date BETWEEN starts_on AND ends_on ORDER BY starts_on DESC LIMIT 1`)).rows[0]
+  const campaignRanking = campaign ? rankingOf((await rankingRows(new Date(`${campaign.starts_on}T00:00:00Z`), new Date(new Date(`${campaign.ends_on}T00:00:00Z`).getTime() + 86_400_000))).rows, affiliate.id) : null
+  return { month, campaign: campaign && campaignRanking ? { title: campaign.title, prize: campaign.prize, startsOn: campaign.starts_on, endsOn: campaign.ends_on, ...campaignRanking } : null }
 })
 
 app.get('/api/me', { preHandler: authenticate }, async (request, reply) => {
@@ -498,6 +702,114 @@ app.put('/api/admin/team/:userId/role', { preHandler: authenticate, config: { ra
   await query('UPDATE users SET platform_role = $2, updated_at = now() WHERE id = $1', [target.id, nextRole])
   await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, 'team.role', JSON.stringify({ email: target.email, from: currentRole, to: nextRole })])
   return teamMember({ ...target, platform_role: nextRole })
+})
+
+// ───────── Afiliados (equipe: só administrador, é financeiro) ─────────
+app.get('/api/admin/affiliates', { preHandler: authenticate }, async (request, reply) => {
+  if (!await adminScope(request, reply, ['master'])) return
+  const monthStart = new Date(); monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0)
+  const affiliates = (await query<{ id: string; nickname: string; code: string; status: string; name: string; email: string; created_at: string; clicks: string; signups: string; pix_type: string | null }>(
+    `SELECT a.id, a.nickname, a.code, a.status, u.name, u.email, a.created_at, a.pix_key_type AS pix_type,
+       COALESCE((SELECT sum(clicks) FROM affiliate_clicks WHERE affiliate_id = a.id), 0)::text AS clicks,
+       (SELECT count(*) FROM companies WHERE referred_by_affiliate_id = a.id)::text AS signups
+     FROM affiliates a JOIN users u ON u.id = a.user_id ORDER BY a.created_at DESC`)).rows
+  const commissions = (await query<{ id: string; affiliate_id: string; company: string; amount_cents: number; status: 'pending' | 'requested' | 'paid' | 'canceled' | 'reversed_after_payout'; available_at: string; created_at: string; canceled_reason: string | null; nickname: string }>(
+    `SELECT k.id, k.affiliate_id, c.name AS company, k.amount_cents, k.status, k.available_at, k.created_at, k.canceled_reason, a.nickname
+     FROM affiliate_commissions k JOIN companies c ON c.id = k.company_id JOIN affiliates a ON a.id = k.affiliate_id ORDER BY k.created_at DESC LIMIT 500`)).rows
+  const payouts = (await query<{ id: string; amount_cents: number; status: string; requested_at: string; resolved_at: string | null; note: string | null; pix_key_encrypted: string; pix_key_type: PixKeyType; nickname: string; name: string; email: string }>(
+    `SELECT p.id, p.amount_cents, p.status, p.requested_at, p.resolved_at, p.note, p.pix_key_encrypted, p.pix_key_type, a.nickname, u.name, u.email
+     FROM affiliate_payouts p JOIN affiliates a ON a.id = p.affiliate_id JOIN users u ON u.id = a.user_id
+     ORDER BY (p.status = 'requested') DESC, p.requested_at DESC LIMIT 100`)).rows
+  const campaigns = (await query<{ id: string; title: string; prize: string | null; starts_on: string; ends_on: string }>('SELECT id, title, prize, starts_on::text, ends_on::text FROM affiliate_campaigns ORDER BY starts_on DESC LIMIT 20')).rows
+  const items = affiliates.map((affiliate) => {
+    const own = commissions.filter((row) => row.affiliate_id === affiliate.id)
+    const counted = own.filter((row) => row.status !== 'canceled' && row.status !== 'reversed_after_payout')
+    return { id: affiliate.id, nickname: affiliate.nickname, code: affiliate.code, status: affiliate.status, name: affiliate.name, email: affiliate.email, createdAt: affiliate.created_at, hasPix: Boolean(affiliate.pix_type), clicks: Number(affiliate.clicks), signups: Number(affiliate.signups), sales: counted.length, balance: balanceOf(own) }
+  })
+  const open = payouts.filter((row) => row.status === 'requested')
+  return {
+    totals: {
+      affiliates: items.length, active: items.filter((item) => item.status === 'active').length,
+      payoutsOpen: open.length, payoutsOpenCents: open.reduce((sum, row) => sum + row.amount_cents, 0),
+      pendingCents: items.reduce((sum, item) => sum + item.balance.pendingCents, 0), availableCents: items.reduce((sum, item) => sum + item.balance.availableCents, 0),
+      salesThisMonth: commissions.filter((row) => row.status !== 'canceled' && row.status !== 'reversed_after_payout' && new Date(row.created_at) >= monthStart).length,
+    },
+    affiliates: items,
+    // A chave Pix aparece inteira só nos saques em aberto, que é quando a equipe precisa dela para pagar.
+    payouts: payouts.map((row) => ({ ...payoutView(row), nickname: row.nickname, name: row.name, email: row.email, pixType: row.pix_key_type, pixKey: row.status === 'requested' ? decryptSecret(row.pix_key_encrypted) : maskPixKey(row.pix_key_type, decryptSecret(row.pix_key_encrypted)) })),
+    commissions: commissions.map((row) => ({ id: row.id, nickname: row.nickname, company: row.company, amountCents: row.amount_cents, status: row.status, availableAt: row.available_at, createdAt: row.created_at, reason: row.canceled_reason })),
+    campaigns: campaigns.map((row) => ({ id: row.id, title: row.title, prize: row.prize, startsOn: row.starts_on, endsOn: row.ends_on })),
+  }
+})
+
+const resolvePayout = async (request: FastifyRequest, reply: FastifyReply, outcome: 'paid' | 'rejected') => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+  const body = z.object({ note: z.string().trim().max(300).optional() }).safeParse(request.body ?? {})
+  if (!params.success || !body.success) return reply.code(400).send({ error: 'Confira os dados do saque.' })
+  if (outcome === 'rejected' && !body.data.note) return reply.code(400).send({ error: 'Explique o motivo da recusa: o afiliado vai ler.' })
+  const done = await transaction(async (client) => {
+    const payout = await client.query<{ id: string; amount_cents: number; affiliate_id: string }>(`UPDATE affiliate_payouts SET status = $2, resolved_at = now(), resolved_by = $3, note = $4 WHERE id = $1 AND status = 'requested' RETURNING id, amount_cents, affiliate_id`, [params.data.id, outcome, scope.userId, body.data.note ?? null])
+    if (!payout.rows[0]) return null
+    // Pago: as comissões do saque viram pagas. Recusado: voltam a ficar disponíveis para um novo pedido.
+    if (outcome === 'paid') await client.query(`UPDATE affiliate_commissions SET status = 'paid', updated_at = now() WHERE payout_id = $1 AND status = 'requested'`, [params.data.id])
+    else await client.query(`UPDATE affiliate_commissions SET status = 'pending', payout_id = NULL, updated_at = now() WHERE payout_id = $1 AND status = 'requested'`, [params.data.id])
+    return payout.rows[0]
+  })
+  if (!done) return reply.code(409).send({ error: 'Este saque já foi resolvido ou não existe.' })
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, `affiliate.payout.${outcome}`, JSON.stringify({ payoutId: done.id, affiliateId: done.affiliate_id, amountCents: done.amount_cents, note: body.data.note ?? null })])
+  return { id: done.id, status: outcome }
+}
+app.post('/api/admin/affiliates/payouts/:id/pay', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 hour' }, logLevel: 'warn' } }, (request, reply) => resolvePayout(request, reply, 'paid'))
+app.post('/api/admin/affiliates/payouts/:id/reject', { preHandler: authenticate, config: { rateLimit: { max: 60, timeWindow: '1 hour' }, logLevel: 'warn' } }, (request, reply) => resolvePayout(request, reply, 'rejected'))
+
+app.post('/api/admin/affiliates/:id/:action', { preHandler: authenticate, config: { logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ id: z.string().uuid(), action: z.enum(['block', 'unblock']) }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Ação inválida.' })
+  const { rows } = await query<{ id: string }>(`UPDATE affiliates SET status = $2, updated_at = now() WHERE id = $1 RETURNING id`, [params.data.id, params.data.action === 'block' ? 'blocked' : 'active'])
+  if (!rows[0]) return reply.code(404).send({ error: 'Afiliado não encontrado.' })
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, `affiliate.${params.data.action}`, JSON.stringify({ affiliateId: rows[0].id })])
+  return { id: rows[0].id, status: params.data.action === 'block' ? 'blocked' : 'active' }
+})
+
+app.post('/api/admin/affiliates/commissions/:id/cancel', { preHandler: authenticate, config: { logLevel: 'warn' } }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+  const body = z.object({ reason: z.string().trim().min(3).max(300) }).safeParse(request.body)
+  if (!params.success || !body.success) return reply.code(400).send({ error: 'Informe o motivo do cancelamento.' })
+  const { rows } = await query<{ id: string; status: string }>(
+    `UPDATE affiliate_commissions SET status = CASE WHEN status = 'pending' THEN 'canceled' ELSE 'reversed_after_payout' END, canceled_reason = $2, updated_at = now()
+     WHERE id = $1 AND status IN ('pending', 'requested', 'paid') RETURNING id, status`, [params.data.id, body.data.reason],
+  )
+  if (!rows[0]) return reply.code(409).send({ error: 'Esta comissão não pode mais ser cancelada.' })
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, 'affiliate.commission.cancel', JSON.stringify({ commissionId: rows[0].id, reason: body.data.reason })])
+  return rows[0]
+})
+
+const campaignSchema = z.object({ title: z.string().trim().min(3).max(80), prize: z.string().trim().max(160).optional(), startsOn: z.string().date(), endsOn: z.string().date() })
+  .refine((value) => value.endsOn >= value.startsOn, { message: 'O fim da campanha precisa ser depois do início.' })
+app.post('/api/admin/affiliates/campaigns', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const parsed = campaignSchema.safeParse(request.body)
+  if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'Confira os dados da campanha.' })
+  const { rows } = await query<{ id: string }>('INSERT INTO affiliate_campaigns (title, prize, starts_on, ends_on) VALUES ($1, $2, $3, $4) RETURNING id', [parsed.data.title, parsed.data.prize ?? null, parsed.data.startsOn, parsed.data.endsOn])
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, 'affiliate.campaign.create', JSON.stringify(parsed.data)])
+  return reply.code(201).send({ id: rows[0].id })
+})
+app.delete('/api/admin/affiliates/campaigns/:id', { preHandler: authenticate }, async (request, reply) => {
+  const scope = await adminScope(request, reply, ['master'])
+  if (!scope) return
+  const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+  if (!params.success) return reply.code(400).send({ error: 'Campanha inválida.' })
+  const { rowCount } = await query('DELETE FROM affiliate_campaigns WHERE id = $1', [params.data.id])
+  if (!rowCount) return reply.code(404).send({ error: 'Campanha não encontrada.' })
+  await query('INSERT INTO admin_audit_log (user_id, company_id, action, detail) VALUES ($1, NULL, $2, $3::jsonb)', [scope.userId, 'affiliate.campaign.delete', JSON.stringify({ campaignId: params.data.id })])
+  return reply.code(204).send()
 })
 
 app.get('/api/admin/audit', { preHandler: authenticate }, async (request, reply) => {
@@ -2267,6 +2579,17 @@ app.post('/webhooks/asaas', { config: { logLevel: 'warn' } }, async (request, re
     [companyId, paymentId, subscriptionId, billingType, valueCents, status, dueDate, paidAt, invoiceUrl, JSON.stringify(paymentPayload)],
   )
 
+  // Estorno, chargeback, remoção ou reversão do pagamento que gerou a comissão desfazem a comissão (só dele, nunca de outra cobrança).
+  if (commissionEffectFor(eventType) === 'cancel') {
+    await query(
+      `UPDATE affiliate_commissions SET
+         status = CASE WHEN status = 'pending' THEN 'canceled' WHEN status IN ('requested', 'paid') THEN 'reversed_after_payout' ELSE status END,
+         canceled_reason = $2, updated_at = now()
+       WHERE asaas_payment_id = $1 AND status IN ('pending', 'requested', 'paid')`,
+      [paymentId, `Pagamento ${eventType.replace('PAYMENT_', '').toLowerCase()} no Asaas`],
+    )
+  }
+
   const effect = billingEffectFor(eventType)
   const subscriptionRow = await query<{ price_cents: number }>('SELECT price_cents FROM billing_subscriptions WHERE company_id = $1', [companyId])
   const expectedCents = subscriptionRow.rows[0]?.price_cents ?? 0
@@ -2282,6 +2605,17 @@ app.post('/webhooks/asaas', { config: { logLevel: 'warn' } }, async (request, re
       `INSERT INTO audit_logs (company_id, action, entity_type, entity_id, metadata) VALUES ($1, 'billing.activated', 'company', $1, $2::jsonb)`,
       [companyId, JSON.stringify({ paymentId, eventType, valueCents })],
     )
+    // Primeira assinatura de uma empresa indicada por afiliado: nasce UMA comissão (company_id é único), pendente por 30 dias.
+    // Só pagamento real do Asaas chega aqui; cortesia e acesso liberado à mão nunca geram comissão.
+    const amount = commissionFor(expectedCents, valueCents)
+    if (amount > 0) {
+      await query(
+        `INSERT INTO affiliate_commissions (affiliate_id, company_id, asaas_payment_id, amount_cents, available_at)
+         SELECT a.id, c.id, $2, $3, $4 FROM companies c JOIN affiliates a ON a.id = c.referred_by_affiliate_id
+         WHERE c.id = $1 AND a.status = 'active' ON CONFLICT (company_id) DO NOTHING`,
+        [companyId, paymentId, amount, availableAtFor(new Date())],
+      )
+    }
   } else if (effect === 'suspend') {
     await query(`UPDATE companies SET billing_status = 'expired', updated_at = now() WHERE id = $1`, [companyId])
     await query(`UPDATE billing_subscriptions SET status = 'overdue', last_event_at = now(), updated_at = now() WHERE company_id = $1`, [companyId])

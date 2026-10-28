@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, Bot, CalendarCheck, CalendarPlus, CalendarRange, Check, CircleAlert, Eye, Gift, History, Infinity as InfinityIcon, LockKeyhole, Megaphone, MessageCircleMore, Search, ShieldCheck, Timer, TrendingUp, Wallet, X } from 'lucide-react'
-import { api, type AdminAccessAction, type AdminAuditRow, type AdminCompany, type AdminPayment, type AdminSubscription, type AdminSubscriptions, type AdminTeamMember, type AdminTrafficRow, type Session } from './lib/api'
+import { api, type AdminAccessAction, type AdminAffiliateCommissionStatus, type AdminAffiliates, type AdminAuditRow, type AffiliatePixType, type AdminCompany, type AdminPayment, type AdminSubscription, type AdminSubscriptions, type AdminTeamMember, type AdminTrafficRow, type Session } from './lib/api'
 import { ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 
@@ -19,7 +19,7 @@ const daysText = (days: number | null) => days === null ? '' : days === 0 ? 'ter
 const paymentLabel = (status: string) => ({ PENDING: 'Aguardando', RECEIVED: 'Pago', CONFIRMED: 'Confirmado', RECEIVED_IN_CASH: 'Pago', OVERDUE: 'Vencido', REFUNDED: 'Estornado', REFUND_REQUESTED: 'Estorno solicitado', CHARGEBACK_REQUESTED: 'Chargeback', AWAITING_RISK_ANALYSIS: 'Em análise', DELETED: 'Removido' } as Record<string, string>)[status] ?? status
 const paymentTone = (status: string) => ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'].includes(status) ? 'ok' : status === 'OVERDUE' ? 'bad' : 'wait'
 const methodLabel = (type: string | null) => ({ pix: 'Pix', boleto: 'Boleto', card: 'Cartão', card_recurring: 'Cartão recorrente' } as Record<string, string>)[type ?? ''] ?? '—'
-const accessAuditLabel = (action: string) => ({ 'team.role': 'Mudou o papel de alguém da equipe', 'access.trial_plus_7': 'Deu +7 dias de teste', 'access.monthly': 'Liberou acesso mensal', 'access.annual': 'Liberou acesso anual', 'access.lifetime': 'Liberou acesso vitalício', 'access.revoke': 'Revogou o acesso liberado' } as Record<string, string>)[action]
+const accessAuditLabel = (action: string) => ({ 'team.role': 'Mudou o papel de alguém da equipe', 'access.trial_plus_7': 'Deu +7 dias de teste', 'access.monthly': 'Liberou acesso mensal', 'access.annual': 'Liberou acesso anual', 'access.lifetime': 'Liberou acesso vitalício', 'access.revoke': 'Revogou o acesso liberado', 'affiliate.payout.paid': 'Pagou um saque de afiliado', 'affiliate.payout.rejected': 'Recusou um saque de afiliado', 'affiliate.block': 'Bloqueou um afiliado', 'affiliate.unblock': 'Desbloqueou um afiliado', 'affiliate.commission.cancel': 'Cancelou uma comissão', 'affiliate.campaign.create': 'Criou uma campanha de afiliados', 'affiliate.campaign.delete': 'Apagou uma campanha de afiliados' } as Record<string, string>)[action]
 const auditLabel = (action: string) => accessAuditLabel(action) ?? (action.startsWith('subscription.cancel') ? 'Cancelou uma assinatura' : action.startsWith('PUT /api/chatbot') || action.startsWith('POST /api/chatbot') || action.startsWith('DELETE /api/chatbot') ? 'Alterou o chatbot' : action.startsWith('POST /api/traffic') ? 'Registrou uma campanha' : action.startsWith('GET /api/conversations') ? 'Leu conversas' : action)
 
 function StatusBadge({ tone, children }: { tone: 'ok' | 'bad' | 'wait' | 'info' | 'muted'; children: ReactNode }) {
@@ -345,6 +345,126 @@ export function AdminTeamPage({ session }: { session: Session }) {
           : <>{pending.role === 'master' ? 'Ela passa a ver o financeiro, liberar acessos e gerenciar a equipe.' : 'Ela passa a ver só o chatbot e a gestão de tráfego dos clientes.'}{pending.person.companyName ? <> A conta de cliente dela (<b>{pending.person.companyName}</b>) deixa de aparecer nas listas de clientes e nos totais.</> : null} Ela precisa sair e entrar de novo no CRM.</>}</span></p>
         <div className="adm-confirm__actions"><button type="button" className="adm-btn" onClick={() => setPending(null)} disabled={saving}>Voltar</button><button type="button" className={`adm-btn ${pending.role === 'none' ? 'adm-btn--danger' : 'adm-btn--primary'}`} onClick={() => void confirm()} disabled={saving}>{saving ? 'Salvando…' : 'Confirmar'}</button></div>
       </div>
+    </>}
+  </>
+}
+
+// ───────────────────────── Afiliados: saques, afiliados, comissões e campanhas (só master, é financeiro) ─────────────────────────
+type AffiliateTab = 'payouts' | 'affiliates' | 'commissions' | 'campaigns'
+const pixTypeLabel: Record<AffiliatePixType, string> = { cpf: 'CPF', cnpj: 'CNPJ', phone: 'Celular', email: 'E-mail', random: 'Aleatória' }
+const commissionLabel: Record<AdminAffiliateCommissionStatus, { text: string; tone: 'ok' | 'bad' | 'wait' | 'info' | 'muted' }> = {
+  pending: { text: 'Em análise', tone: 'info' }, requested: { text: 'Em saque', tone: 'wait' }, paid: { text: 'Paga', tone: 'ok' }, canceled: { text: 'Cancelada', tone: 'muted' }, reversed_after_payout: { text: 'Estornada após o saque', tone: 'bad' },
+}
+type AffiliateAsk = { kind: 'reject' | 'cancel'; id: string; label: string }
+
+export function AdminAffiliatesPage({ session }: { session: Session }) {
+  const [data, setData] = useState<AdminAffiliates | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [tab, setTab] = useState<AffiliateTab>('payouts')
+  const [busy, setBusy] = useState('')
+  const [ask, setAsk] = useState<AffiliateAsk | null>(null)
+  const [reason, setReason] = useState('')
+  const [copied, setCopied] = useState('')
+  const today = new Date().toISOString().slice(0, 10)
+  const [campaign, setCampaign] = useState({ title: '', prize: '', startsOn: today, endsOn: '' })
+
+  const load = useCallback(async () => {
+    try { setData(await api.adminAffiliates(session)); setError('') } catch (reason) { setError(errorText(reason, 'Não foi possível carregar os afiliados.')) }
+  }, [session])
+  useEffect(() => { void load() }, [load])
+
+  const run = async (key: string, action: () => Promise<unknown>, done: string) => {
+    setBusy(key); setError(''); setNotice('')
+    try { await action(); setNotice(done); setAsk(null); setReason(''); await load() } catch (failure) { setError(errorText(failure, 'Não foi possível concluir.')) } finally { setBusy('') }
+  }
+  const copyPix = async (id: string, key: string) => {
+    try { await navigator.clipboard.writeText(key); setCopied(id); window.setTimeout(() => setCopied(''), 2000) } catch { setError('Não foi possível copiar. Selecione a chave e copie à mão.') }
+  }
+
+  const openPayouts = data?.payouts.filter((row) => row.status === 'requested') ?? []
+
+  return <>
+    <PageHead eyebrow="EQUIPE OTIMIZA · FINANCEIRO" title="Afiliados" text="Quem vende o Otimiza CRM, o que cada um tem a receber e os saques para pagar por Pix. Comissão: 50% de uma mensalidade, liberada 30 dias depois do pagamento." />
+    {error && <Notice>{error}</Notice>}
+    {notice && <Notice tone="info">{notice}</Notice>}
+    {!data && !error && <p className="page-loading">Carregando afiliados…</p>}
+    {data && <>
+      <section className="adm-kpis adm-kpis--4" aria-label="Resumo dos afiliados">
+        <Kpi emphasis={data.totals.payoutsOpen > 0} icon={<Wallet size={16} />} label="Saques a pagar" value={brlCents(data.totals.payoutsOpenCents)} hint={data.totals.payoutsOpen ? `${data.totals.payoutsOpen} ${data.totals.payoutsOpen === 1 ? 'pedido esperando' : 'pedidos esperando'} o Pix` : 'nenhum pedido aberto'} />
+        <Kpi icon={<Timer size={16} />} label="Comissões a liberar" value={brlCents(data.totals.pendingCents)} hint={`${brlCents(data.totals.availableCents)} já disponível para saque`} />
+        <Kpi icon={<TrendingUp size={16} />} label="Vendas no mês" value={String(data.totals.salesThisMonth)} hint="assinaturas vindas de afiliados" />
+        <Kpi icon={<Gift size={16} />} label="Afiliados ativos" value={String(data.totals.active)} hint={`${data.totals.affiliates} no total`} />
+      </section>
+
+      {ask && <form className="adm-ask" onSubmit={(event) => {
+        event.preventDefault()
+        void (ask.kind === 'reject' ? run(`reject-${ask.id}`, () => api.adminAffiliatePayout(session, ask.id, 'reject', reason), 'Saque recusado. O saldo voltou para o afiliado.') : run(`cancel-${ask.id}`, () => api.adminAffiliateCancelCommission(session, ask.id, reason), 'Comissão cancelada.'))
+      }}>
+        <label><b>{ask.kind === 'reject' ? 'Motivo da recusa' : 'Motivo do cancelamento'}</b><small>{ask.label}{ask.kind === 'reject' ? ' · o afiliado vai ler' : ''}</small><input required autoFocus minLength={3} maxLength={300} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={ask.kind === 'reject' ? 'Ex.: a chave Pix não confere com o titular' : 'Ex.: venda feita para o próprio afiliado'} /></label>
+        <button className="adm-btn adm-btn--danger" type="submit" disabled={Boolean(busy) || reason.trim().length < 3}>{ask.kind === 'reject' ? 'Recusar saque' : 'Cancelar comissão'}</button>
+        <button className="adm-btn" type="button" onClick={() => { setAsk(null); setReason('') }}>Voltar</button>
+      </form>}
+
+      <section className="panel adm-table-panel">
+        <div className="adm-toolbar">
+          <div className="adm-chips" role="group" aria-label="Seções de afiliados">
+            {([['payouts', 'Saques', openPayouts.length], ['affiliates', 'Afiliados', data.affiliates.length], ['commissions', 'Comissões', data.commissions.length], ['campaigns', 'Campanhas', data.campaigns.length]] as Array<[AffiliateTab, string, number]>).map(([id, label, count]) => <button key={id} type="button" aria-pressed={tab === id} className={tab === id ? 'is-on' : ''} onClick={() => setTab(id)}>{label}<em>{count}</em></button>)}
+          </div>
+        </div>
+
+        {tab === 'payouts' && (data.payouts.length ? <table className="adm-table">
+          <thead><tr><th scope="col">Afiliado</th><th scope="col">Valor</th><th scope="col">Chave Pix</th><th scope="col">Pedido</th><th scope="col">Situação</th><th scope="col">Ação</th></tr></thead>
+          <tbody>{data.payouts.map((row) => <tr key={row.id}>
+            <td data-label="Afiliado"><b>{row.nickname}</b><small>{row.name} · {row.email}</small></td>
+            <td data-label="Valor"><b>{brlCents(row.amountCents)}</b></td>
+            <td data-label="Chave Pix"><small>{pixTypeLabel[row.pixType]}</small><b className="adm-mono">{row.pixKey}</b>{row.status === 'requested' && <button className="adm-btn adm-btn--small" type="button" onClick={() => void copyPix(row.id, row.pixKey)}>{copied === row.id ? <><Check size={13} /> Copiada</> : 'Copiar chave'}</button>}</td>
+            <td data-label="Pedido">{day(row.requestedAt)}{row.resolvedAt && <small>resolvido em {day(row.resolvedAt)}</small>}</td>
+            <td data-label="Situação"><StatusBadge tone={row.status === 'paid' ? 'ok' : row.status === 'rejected' ? 'bad' : 'wait'}>{row.status === 'paid' ? 'Pago' : row.status === 'rejected' ? 'Recusado' : 'A pagar'}</StatusBadge>{row.note && <small>{row.note}</small>}</td>
+            <td data-label="Ação">{row.status === 'requested' ? <div className="adm-actions">
+              <button className="adm-btn adm-btn--primary" type="button" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Você já enviou o Pix de ${brlCents(row.amountCents)} para ${row.nickname}? Isto marca o saque como pago.`)) void run(`pay-${row.id}`, () => api.adminAffiliatePayout(session, row.id, 'pay', `Pix enviado em ${new Date().toLocaleString('pt-BR')}`), 'Saque marcado como pago.') }}>{busy === `pay-${row.id}` ? 'Salvando…' : 'Marcar como pago'}</button>
+              <button className="adm-btn" type="button" disabled={Boolean(busy)} onClick={() => { setAsk({ kind: 'reject', id: row.id, label: `${row.nickname} · ${brlCents(row.amountCents)}` }); setReason('') }}>Recusar</button>
+            </div> : <span className="adm-muted">—</span>}</td>
+          </tr>)}</tbody>
+        </table> : <div className="adm-empty"><Wallet size={22} /><b>Nenhum saque pedido ainda.</b><p>Quando um afiliado pedir o saque, a chave Pix e o valor aparecem aqui para você pagar.</p></div>)}
+
+        {tab === 'affiliates' && (data.affiliates.length ? <table className="adm-table">
+          <thead><tr><th scope="col">Afiliado</th><th scope="col">Situação</th><th scope="col">Cliques</th><th scope="col">Testes</th><th scope="col">Vendas</th><th scope="col">Saldo</th><th scope="col">Ação</th></tr></thead>
+          <tbody>{data.affiliates.map((row) => <tr key={row.id}>
+            <td data-label="Afiliado"><b>{row.nickname}</b><small>{row.name} · {row.email}</small><small>link: ?ref={row.code}</small></td>
+            <td data-label="Situação"><StatusBadge tone={row.status === 'active' ? 'ok' : 'bad'}>{row.status === 'active' ? 'Ativo' : 'Bloqueado'}</StatusBadge>{!row.hasPix && <small>sem chave Pix</small>}</td>
+            <td data-label="Cliques">{row.clicks}</td><td data-label="Testes">{row.signups}</td><td data-label="Vendas">{row.sales}</td>
+            <td data-label="Saldo"><b>{brlCents(row.balance.availableCents)}</b><small>disponível · {brlCents(row.balance.pendingCents)} a liberar · {brlCents(row.balance.paidCents)} pago</small></td>
+            <td data-label="Ação"><button className="adm-btn" type="button" disabled={Boolean(busy)} onClick={() => { if (row.status === 'active' && !window.confirm(`Bloquear ${row.nickname}? Novas vendas não geram comissão e saques ficam suspensos.`)) return; void run(`block-${row.id}`, () => api.adminAffiliateBlock(session, row.id, row.status === 'active' ? 'block' : 'unblock'), row.status === 'active' ? 'Afiliado bloqueado.' : 'Afiliado desbloqueado.') }}>{row.status === 'active' ? 'Bloquear' : 'Desbloquear'}</button></td>
+          </tr>)}</tbody>
+        </table> : <div className="adm-empty"><Gift size={22} /><b>Nenhum afiliado ainda.</b><p>A página de cadastro está em /afiliados. Divulgue o programa para começar.</p></div>)}
+
+        {tab === 'commissions' && (data.commissions.length ? <table className="adm-table">
+          <thead><tr><th scope="col">Afiliado</th><th scope="col">Empresa indicada</th><th scope="col">Valor</th><th scope="col">Situação</th><th scope="col">Libera em</th><th scope="col">Ação</th></tr></thead>
+          <tbody>{data.commissions.map((row) => <tr key={row.id}>
+            <td data-label="Afiliado"><b>{row.nickname}</b></td><td data-label="Empresa indicada">{row.company}<small>venda em {day(row.createdAt)}</small></td>
+            <td data-label="Valor"><b>{brlCents(row.amountCents)}</b></td>
+            <td data-label="Situação"><StatusBadge tone={commissionLabel[row.status].tone}>{commissionLabel[row.status].text}</StatusBadge>{row.reason && <small>{row.reason}</small>}</td>
+            <td data-label="Libera em">{row.status === 'pending' ? day(row.availableAt) : <span className="adm-muted">—</span>}</td>
+            <td data-label="Ação">{['pending', 'requested', 'paid'].includes(row.status) ? <button className="adm-btn" type="button" disabled={Boolean(busy)} onClick={() => { setAsk({ kind: 'cancel', id: row.id, label: `${row.nickname} · ${row.company} · ${brlCents(row.amountCents)}` }); setReason('') }}>Cancelar</button> : <span className="adm-muted">—</span>}</td>
+          </tr>)}</tbody>
+        </table> : <div className="adm-empty"><TrendingUp size={22} /><b>Nenhuma comissão ainda.</b><p>Ela nasce quando uma empresa indicada tem o primeiro pagamento confirmado.</p></div>)}
+
+        {tab === 'campaigns' && <div className="adm-campaigns">
+          <form className="adm-campaign-form" onSubmit={(event) => { event.preventDefault(); void run('campaign', async () => { await api.adminAffiliateCampaign(session, campaign); setCampaign({ title: '', prize: '', startsOn: today, endsOn: '' }) }, 'Campanha criada. Os afiliados já veem o ranking dela.') }}>
+            <h3>Nova competição</h3>
+            <label>Nome<input required minLength={3} maxLength={80} value={campaign.title} onChange={(event) => setCampaign({ ...campaign, title: event.target.value })} placeholder="Ex.: Corrida de novembro" /></label>
+            <label>Prêmio <small>opcional</small><input maxLength={160} value={campaign.prize} onChange={(event) => setCampaign({ ...campaign, prize: event.target.value })} placeholder="Ex.: R$ 500 para o 1º lugar" /></label>
+            <label>Início<input required type="date" value={campaign.startsOn} onChange={(event) => setCampaign({ ...campaign, startsOn: event.target.value })} /></label>
+            <label>Fim<input required type="date" min={campaign.startsOn} value={campaign.endsOn} onChange={(event) => setCampaign({ ...campaign, endsOn: event.target.value })} /></label>
+            <button className="adm-btn adm-btn--primary" type="submit" disabled={Boolean(busy)}>Criar campanha</button>
+          </form>
+          {data.campaigns.length ? <ul className="adm-campaign-list">{data.campaigns.map((item) => {
+            const live = item.startsOn <= today && today <= item.endsOn
+            return <li key={item.id}><div><b>{item.title}</b>{live && <StatusBadge tone="ok">Valendo</StatusBadge>}<small>{day(item.startsOn)} a {day(item.endsOn)}{item.prize ? ` · ${item.prize}` : ''}</small></div><button className="adm-btn" type="button" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`Apagar a campanha "${item.title}"? O ranking dela some para os afiliados.`)) void run(`del-${item.id}`, () => api.adminAffiliateDeleteCampaign(session, item.id), 'Campanha apagada.') }}>Apagar</button></li>
+          })}</ul> : <p className="adm-muted">Nenhuma competição criada. Crie uma para os afiliados disputarem com prêmio.</p>}
+        </div>}
+      </section>
     </>}
   </>
 }

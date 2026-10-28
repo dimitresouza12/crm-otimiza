@@ -65,7 +65,7 @@ const request = async <T>(path: string, options: RequestInit = {}, session?: Ses
 }
 
 export const api = {
-  register: (input: { name: string; companyName: string; email: string; password: string; segment?: string; objective?: string; usesOtimizaAutomation?: boolean; plan?: 'crm' | 'chatbot'; channelLimit?: number }) =>
+  register: (input: { name: string; companyName: string; email: string; password: string; segment?: string; objective?: string; usesOtimizaAutomation?: boolean; plan?: 'crm' | 'chatbot'; channelLimit?: number; ref?: string }) =>
     request<Session & { trialEndsAt: string }>('/api/auth/register', { method: 'POST', body: JSON.stringify(input) }),
   login: (email: string, password: string) => request<Session>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: (session: Session) => request<{ name: string; email: string; company_name: string; plan: string; channel_limit: number; plan_price_cents: number; trial_ends_at: string | null; billing_status: 'trial' | 'active' | 'expired'; uses_automation: boolean; role: string; access_state: 'trial' | 'active' | 'expired'; platform_role: PlatformRole | null; traffic_access_granted_at: string | null }>('/api/me', {}, session),
@@ -123,6 +123,47 @@ export const api = {
   adminCompanies: (session: Session) => request<AdminCompany[]>('/api/admin/companies', {}, session),
   adminTraffic: (session: Session, days: number) => request<{ days: number; items: AdminTrafficRow[] }>(`/api/admin/traffic?days=${days}`, {}, session),
   adminAudit: (session: Session) => request<AdminAuditRow[]>('/api/admin/audit', {}, session),
+  // Afiliados: o token do afiliado é próprio (companyId guarda o id do afiliado) e não abre nenhuma rota do CRM.
+  affiliateRegister: (input: { name: string; email: string; password: string; nickname: string; acceptTerms: boolean }) =>
+    request<AffiliateAuth>('/api/affiliate/register', { method: 'POST', body: JSON.stringify(input) }),
+  affiliateLogin: (email: string, password: string) => request<AffiliateAuth>('/api/affiliate/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  affiliateClick: (code: string) => request<void>('/api/affiliate/click', { method: 'POST', body: JSON.stringify({ code }) }),
+  affiliateMe: (session: Session) => request<AffiliateMe>('/api/affiliate/me', {}, session),
+  affiliateReferrals: (session: Session) => request<AffiliateReferral[]>('/api/affiliate/referrals', {}, session),
+  affiliatePayouts: (session: Session) => request<AffiliatePayout[]>('/api/affiliate/payouts', {}, session),
+  affiliateSavePix: (session: Session, type: AffiliatePixType, key: string) => request<{ type: AffiliatePixType; masked: string }>('/api/affiliate/pix', { method: 'PUT', body: JSON.stringify({ type, key }) }, session),
+  affiliateRequestPayout: (session: Session) => request<AffiliatePayout>('/api/affiliate/payouts', { method: 'POST', body: JSON.stringify({}) }, session),
+  affiliateRanking: (session: Session) => request<AffiliateRankingData>('/api/affiliate/ranking', {}, session),
+  adminAffiliates: (session: Session) => request<AdminAffiliates>('/api/admin/affiliates', {}, session),
+  adminAffiliatePayout: (session: Session, payoutId: string, outcome: 'pay' | 'reject', note?: string) => request<{ id: string; status: string }>(`/api/admin/affiliates/payouts/${payoutId}/${outcome}`, { method: 'POST', body: JSON.stringify({ note: note?.trim() || undefined }) }, session),
+  adminAffiliateBlock: (session: Session, affiliateId: string, action: 'block' | 'unblock') => request<{ id: string; status: string }>(`/api/admin/affiliates/${affiliateId}/${action}`, { method: 'POST', body: JSON.stringify({}) }, session),
+  adminAffiliateCancelCommission: (session: Session, commissionId: string, reason: string) => request<{ id: string; status: string }>(`/api/admin/affiliates/commissions/${commissionId}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }, session),
+  adminAffiliateCampaign: (session: Session, input: { title: string; prize?: string; startsOn: string; endsOn: string }) => request<{ id: string }>('/api/admin/affiliates/campaigns', { method: 'POST', body: JSON.stringify({ ...input, prize: input.prize?.trim() || undefined }) }, session),
+  adminAffiliateDeleteCampaign: (session: Session, id: string) => request<void>(`/api/admin/affiliates/campaigns/${id}`, { method: 'DELETE' }, session),
+}
+
+export type AffiliateAuth = { token: string; affiliateId: string; code: string; link: string }
+export type AffiliatePixType = 'cpf' | 'cnpj' | 'phone' | 'email' | 'random'
+export type AffiliateBalance = { availableCents: number; pendingCents: number; requestedCents: number; paidCents: number; nextReleaseAt: string | null }
+export type AffiliatePayout = { id: string; amountCents: number; status: 'requested' | 'paid' | 'rejected'; requestedAt: string; resolvedAt: string | null; note: string | null }
+export type AffiliateMe = {
+  name: string; nickname: string; email: string; code: string; link: string; status: 'active' | 'blocked'
+  balance: AffiliateBalance
+  funnel: { clicks: number; signups: number; subscriptions: number; salesThisMonth: number }
+  pix: { type: AffiliatePixType; masked: string } | null
+  openPayout: AffiliatePayout | null
+}
+export type AffiliateReferral = { company: string; referredAt: string; stage: 'trial' | 'trial_ended' | 'subscribed' | 'canceled'; commissionCents: number | null; commissionStatus: string | null; availableAt: string | null }
+export type AffiliateRankEntry = { position: number; nickname: string; sales: number; amountCents: number; isMe: boolean }
+export type AffiliateRanking = { top: AffiliateRankEntry[]; me: AffiliateRankEntry | null }
+export type AffiliateRankingData = { month: AffiliateRanking; campaign: (AffiliateRanking & { title: string; prize: string | null; startsOn: string; endsOn: string }) | null }
+export type AdminAffiliateCommissionStatus = 'pending' | 'requested' | 'paid' | 'canceled' | 'reversed_after_payout'
+export type AdminAffiliates = {
+  totals: { affiliates: number; active: number; payoutsOpen: number; payoutsOpenCents: number; pendingCents: number; availableCents: number; salesThisMonth: number }
+  affiliates: Array<{ id: string; nickname: string; code: string; status: 'active' | 'blocked'; name: string; email: string; createdAt: string; hasPix: boolean; clicks: number; signups: number; sales: number; balance: AffiliateBalance }>
+  payouts: Array<AffiliatePayout & { nickname: string; name: string; email: string; pixType: AffiliatePixType; pixKey: string }>
+  commissions: Array<{ id: string; nickname: string; company: string; amountCents: number; status: AdminAffiliateCommissionStatus; availableAt: string; createdAt: string; reason: string | null }>
+  campaigns: Array<{ id: string; title: string; prize: string | null; startsOn: string; endsOn: string }>
 }
 
 export type PlatformRole = 'master' | 'traffic'

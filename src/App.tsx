@@ -38,6 +38,7 @@ import {
   Target,
   TrendingUp,
   UsersRound,
+  Trophy,
   Wallet,
   X,
 } from 'lucide-react'
@@ -46,10 +47,11 @@ import { api, type LeadRequestData, type Session } from './lib/api'
 import { ChatDrawer, ChatPage } from './ChatPage'
 import { ChatbotPage } from './ChatbotPage'
 import { BillingCheckout } from './BillingCheckout'
-import { AdminChatbotPage, AdminSubscriptionsPage, AdminTeamPage, AdminTrafficPage, TrafficAccessCard } from './AdminPanel'
+import { AffiliateArea } from './AffiliateArea'
+import { AdminAffiliatesPage, AdminChatbotPage, AdminSubscriptionsPage, AdminTeamPage, AdminTrafficPage, TrafficAccessCard } from './AdminPanel'
 import { connectEvents, onChatEvent } from './lib/events'
 
-type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes' | 'admin_assinaturas' | 'admin_equipe' | 'admin_chatbot' | 'admin_trafego'
+type Page = 'dashboard' | 'crm' | 'leads' | 'conversas' | 'vendas' | 'trafego' | 'relatorios' | 'chatbot' | 'configuracoes' | 'admin_assinaturas' | 'admin_afiliados' | 'admin_equipe' | 'admin_chatbot' | 'admin_trafego'
 type Stage = 'Novos leads' | 'Qualificados' | 'Proposta enviada' | 'Negociação' | 'Ganhos' | 'Perdidos'
 type Channel = 'Todos os canais' | 'Comercial' | 'Unidade Aldeota' | 'Pós-venda'
 
@@ -96,7 +98,7 @@ const initialLeads: Lead[] = [
 const money = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 })
 
 type PurchasablePlan = 'crm' | 'chatbot'
-type PublicRoute = 'landing' | 'login' | 'signup' | 'app'
+type PublicRoute = 'landing' | 'login' | 'signup' | 'app' | 'affiliates' | 'affiliate'
 type SignupSelection = { plan: PurchasablePlan; channelLimit: number }
 
 const publicPlans: Record<PurchasablePlan, { name: string; baseCents: number; extraCents: number; description: string; features: string[] }> = {
@@ -115,7 +117,28 @@ const publicPlans: Record<PurchasablePlan, { name: string; baseCents: number; ex
 const formatCents = (cents: number) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const selectedPrice = (plan: PurchasablePlan, channelLimit: number) => publicPlans[plan].baseCents + (channelLimit - 1) * publicPlans[plan].extraCents
 const planTitle = (plan: string) => plan === 'chatbot' ? 'Otimiza CRM + Chatbot' : 'Otimiza CRM'
-const routeFromPath = (path: string): PublicRoute => path === '/entrar' ? 'login' : path === '/cadastro' ? 'signup' : path === '/app' ? 'app' : 'landing'
+const routeFromPath = (path: string): PublicRoute => path === '/entrar' ? 'login' : path === '/cadastro' ? 'signup' : path === '/app' ? 'app' : path === '/afiliados' ? 'affiliates' : path === '/afiliado' ? 'affiliate' : 'landing'
+
+// Link de afiliado (?ref=codigo): o último link clicado vale por 60 dias neste navegador e o clique é contado uma vez por dia.
+const REFERRAL_KEY = 'otimiza-ref'
+const REFERRAL_DAYS = 60
+const storedReferral = (): string | undefined => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REFERRAL_KEY) ?? 'null') as { code?: string; at?: number } | null
+    return saved?.code && saved.at && Date.now() - saved.at < REFERRAL_DAYS * 86_400_000 ? saved.code : undefined
+  } catch { return undefined }
+}
+const captureReferral = () => {
+  const code = new URLSearchParams(window.location.search).get('ref')?.trim().toLowerCase()
+  if (!code || !/^[a-z0-9]{3,40}$/.test(code)) return
+  try {
+    localStorage.setItem(REFERRAL_KEY, JSON.stringify({ code, at: Date.now() }))
+    const today = `${code}:${new Date().toISOString().slice(0, 10)}`
+    if (localStorage.getItem('otimiza-ref-click') === today) return
+    localStorage.setItem('otimiza-ref-click', today)
+  } catch { /* sem armazenamento: conta o clique mesmo assim */ }
+  void api.affiliateClick(code).catch(() => undefined)
+}
 const selectionFromLocation = (): SignupSelection => {
   const params = new URLSearchParams(window.location.search)
   const plan = params.get('plano') === 'chatbot' ? 'chatbot' : 'crm'
@@ -139,7 +162,7 @@ function LandingPage({ onNavigate, salesWhatsapp }: { onNavigate: (path: string)
   return <main className="landing-page">
     <header className="landing-header">
       <a className="landing-logo-link" href="/" onClick={(event) => { event.preventDefault(); onNavigate('/') }} aria-label="Página inicial do Otimiza AI CRM"><BrandLockup dark /></a>
-      <nav aria-label="Navegação da página"><a href="#recursos">Recursos</a><a href="#planos">Planos</a><a href="#perguntas">Dúvidas</a></nav>
+      <nav aria-label="Navegação da página"><a href="#recursos">Recursos</a><a href="#planos">Planos</a><a href="#perguntas">Dúvidas</a><a href="/afiliados" onClick={(event) => { event.preventDefault(); onNavigate('/afiliados') }}>Afiliados</a></nav>
       <div className="landing-header__actions"><button className="landing-login" type="button" onClick={() => onNavigate('/entrar')}>Entrar</button><button className="landing-button landing-button--small" type="button" onClick={() => startTrial()}>Teste grátis <ArrowRight size={15}/></button></div>
     </header>
 
@@ -196,7 +219,7 @@ function LandingPage({ onNavigate, salesWhatsapp }: { onNavigate: (path: string)
     <section className="landing-section landing-faq" id="perguntas"><div className="landing-faq__intro"><span className="landing-section__eyebrow">PERGUNTAS FREQUENTES</span><h2>Para começar com clareza.</h2><p>Se ainda restar alguma dúvida, fale com a nossa equipe.</p>{whatsapp && <a className="landing-text-link" href={whatsapp} target="_blank" rel="noreferrer">Chamar no WhatsApp <MessageCircleMore size={17}/></a>}</div><div className="landing-faq__list"><details><summary>Como conecto meu WhatsApp?<ChevronRight size={18}/></summary><p>Depois de criar a conta, acesse Configurações e conecte cada número pelo QR Code. O CRM registra as conversas do número conectado.</p></details><details><summary>Como sei de onde o lead veio?<ChevronRight size={18}/></summary><p>Você pode registrar a origem ao criar o lead ou padronizar as origens usadas pela equipe, como campanha, indicação, orgânico e Google.</p></details><details><summary>Como o faturamento é calculado?<ChevronRight size={18}/></summary><p>O faturamento reúne apenas vendas confirmadas no CRM. Valores em negociação ficam separados até a confirmação.</p></details><details><summary>Qual é a diferença do plano Chatbot?<ChevronRight size={18}/></summary><p>Ele libera a aba de Chatbot para criar mensagens de boas-vindas, respostas padrão e regras por palavra-chave para cada número conectado.</p></details><details><summary>Posso integrar mais de um número?<ChevronRight size={18}/></summary><p>Sim. Cada plano começa com um número e permite contratar até cinco. O total é atualizado no cadastro conforme a quantidade escolhida.</p></details><details><summary>O teste grátis pede cartão?<ChevronRight size={18}/></summary><p>Não. O teste dura 7 dias e não cria cobrança automática. Ao término, sua escolha fica registrada e a equipe da Otimiza conclui a contratação.</p></details></div></section>
 
     <section className="landing-final"><div><span className="landing-kicker"><i/> Comece em poucos minutos</span><h2>Seu próximo resultado pode começar com uma conversa organizada.</h2><p>Crie a conta, conecte seu WhatsApp e acompanhe seu funil por 7 dias.</p></div><button className="landing-button landing-button--light" type="button" onClick={() => startTrial()}>Experimentar o CRM <ArrowRight size={18}/></button></section>
-    <footer className="landing-footer"><a href="/" onClick={(event) => { event.preventDefault(); onNavigate('/') }}><BrandLockup dark /></a><span>© {new Date().getFullYear()} Otimiza AI. CRM para resultados comerciais.</span><button type="button" onClick={() => onNavigate('/entrar')}>Entrar no CRM</button></footer>
+    <footer className="landing-footer"><a href="/" onClick={(event) => { event.preventDefault(); onNavigate('/') }}><BrandLockup dark /></a><span>© {new Date().getFullYear()} Otimiza AI. CRM para resultados comerciais.</span><button type="button" onClick={() => onNavigate('/afiliados')}>Seja afiliado e ganhe 50%</button><button type="button" onClick={() => onNavigate('/entrar')}>Entrar no CRM</button></footer>
   </main>
 }
 
@@ -217,7 +240,7 @@ const chatbotNavItem: typeof navItems[number] = { id: 'chatbot', label: 'Chatbot
 const adminNavFor = (role: 'master' | 'traffic' | null | undefined): typeof navItems => {
   if (!role) return []
   const items: typeof navItems = []
-  if (role === 'master') items.push({ id: 'admin_assinaturas', label: 'Assinaturas', icon: Wallet }, { id: 'admin_equipe', label: 'Equipe', icon: UsersRound })
+  if (role === 'master') items.push({ id: 'admin_assinaturas', label: 'Assinaturas', icon: Wallet }, { id: 'admin_afiliados', label: 'Afiliados', icon: Trophy }, { id: 'admin_equipe', label: 'Equipe', icon: UsersRound })
   items.push({ id: 'admin_chatbot', label: 'Chatbot dos clientes', icon: Bot }, { id: 'admin_trafego', label: 'Gestão de tráfego', icon: Megaphone })
   return items
 }
@@ -883,7 +906,7 @@ function AccessModal({ onClose, onAuthenticated }: { onClose: () => void; onAuth
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError('')
     try {
-      const session = mode === 'login' ? await api.login(email, password) : await api.register({ name, companyName, email, password, usesOtimizaAutomation: usesAutomation })
+      const session = mode === 'login' ? await api.login(email, password) : await api.register({ name, companyName, email, password, usesOtimizaAutomation: usesAutomation, ref: storedReferral() })
       onAuthenticated(session)
       onClose()
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível entrar.') } finally { setSaving(false) }
@@ -919,7 +942,7 @@ function AccessPage({ initialMode, selection, onAuthenticated, onNavigate }: { i
     try {
       const session = mode === 'login'
         ? await api.login(email, password)
-        : await api.register({ name, companyName, email, password, segment, objective, usesOtimizaAutomation: usesAutomation, plan: selection.plan, channelLimit: selection.channelLimit })
+        : await api.register({ name, companyName, email, password, segment, objective, usesOtimizaAutomation: usesAutomation, plan: selection.plan, channelLimit: selection.channelLimit, ref: storedReferral() })
       onAuthenticated(session, mode === 'register')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível acessar sua conta.') } finally { setSaving(false) }
   }
@@ -1113,6 +1136,8 @@ export default function App() {
     else window.scrollTo({ top: 0, behavior: 'auto' })
   }
 
+  useEffect(captureReferral, [])
+
   useEffect(() => {
     const onPopState = () => setRoute(routeFromPath(window.location.pathname))
     window.addEventListener('popstate', onPopState)
@@ -1125,6 +1150,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // As páginas de afiliado definem o próprio título e as metatags em AffiliateArea.
+    if (route === 'affiliates' || route === 'affiliate') return
     const isLanding = route === 'landing'
     document.title = isLanding ? 'Otimiza AI CRM — transforme conversas em resultados' : route === 'signup' ? 'Criar conta — Otimiza AI CRM' : route === 'login' ? 'Entrar — Otimiza AI CRM' : 'Otimiza AI CRM'
     const setMeta = (selector: string, content: string) => {
@@ -1300,6 +1327,7 @@ export default function App() {
     if (page === 'chatbot') return <ChatbotPage session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenIntegrations={() => setPage('configuracoes')} />
     if (page === 'configuracoes') return <Integrations session={session} account={account} onRequestAccess={() => setShowAccess(true)} onOpenChatbot={() => setPage('chatbot')} onTrafficAccessChange={(value) => setAccount((current) => current && { ...current, traffic_access_granted_at: value })} />
     if (page === 'admin_assinaturas' && account?.platform_role === 'master') return <AdminSubscriptionsPage session={session!}/>
+    if (page === 'admin_afiliados' && account?.platform_role === 'master') return <AdminAffiliatesPage session={session!}/>
     if (page === 'admin_equipe' && account?.platform_role === 'master') return <AdminTeamPage session={session!}/>
     if (page === 'admin_chatbot' && account?.platform_role) return <AdminChatbotPage session={session!}/>
     if (page === 'admin_trafego' && account?.platform_role) return <AdminTrafficPage session={session!} renderCampaigns={(scoped) => <TrafficPage session={scoped}/>}/>
@@ -1312,6 +1340,7 @@ export default function App() {
     ? [...navItems.slice(0, 4), chatbotNavItem, ...navItems.slice(4)]
     : navItems
   const adminNavItems = adminNavFor(account?.platform_role)
+  if (route === 'affiliates' || route === 'affiliate') return <AffiliateArea route={route} onNavigate={navigate}/>
   if (!session && route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
   if (!session) return <AccessPage initialMode={route === 'signup' ? 'register' : 'login'} selection={selection} onAuthenticated={authenticateSession} onNavigate={navigate}/>
   if (route === 'landing') return <LandingPage onNavigate={navigate} salesWhatsapp={salesWhatsapp}/>
