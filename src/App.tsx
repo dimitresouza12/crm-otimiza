@@ -12,6 +12,7 @@ import {
   CircleDollarSign,
   CircleHelp,
   CheckCircle2,
+  CircleAlert,
   CalendarDays,
   ClipboardCheck,
   Clock3,
@@ -732,7 +733,7 @@ function HelpCenter({ onClose, onNavigate }: { onClose: () => void; onNavigate: 
   return <Modal onClose={onClose}><header className="modal__header"><div><span className="eyebrow">CENTRAL DE AJUDA</span><h2>Como começar</h2></div><button type="button" onClick={onClose} aria-label="Fechar"><X size={18}/></button></header><div className="help-guides">{guides.map(([title, text, page]) => <button key={title} type="button" onClick={() => { onNavigate(page); onClose() }}><CircleHelp size={18}/><span><b>{title}</b><small>{text}</small></span><ChevronRight size={17}/></button>)}</div></Modal>
 }
 
-type Notification = { id: string; type: 'channel' | 'lead' | 'trial'; title: string; body: string; action: string }
+type Notification = { id: string; type: 'channel' | 'lead' | 'trial'; title: string; body: string; action: string; level?: 'down' | 'quiet'; channelName?: string }
 
 function NotificationsPanel({ notifications, onClose, onNavigate }: { notifications: Notification[]; onClose: () => void; onNavigate: (page: Page) => void }) {
   const target: Record<Notification['type'], Page> = { channel: 'configuracoes', lead: 'crm', trial: 'configuracoes' }
@@ -1238,6 +1239,14 @@ export default function App() {
     return () => { unsubscribe(); window.clearInterval(interval) }
   }, [session])
 
+  // O aviso de WhatsApp desconectado precisa aparecer logo, mesmo com o usuário parado numa tela só.
+  useEffect(() => {
+    if (!session) return
+    const interval = window.setInterval(() => { void api.notifications(session).then(setNotifications).catch(() => undefined) }, 120_000)
+    return () => window.clearInterval(interval)
+  }, [session])
+  const downChannels = notifications.filter((item) => item.type === 'channel' && item.level === 'down')
+
   const unreadTotal = conversations.reduce((total, conversation) => total + (conversation.unread_count ?? 0), 0)
 
   const authenticateSession = (nextSession: Session, isNew = false) => {
@@ -1357,7 +1366,7 @@ export default function App() {
         {adminNavItems.length > 0 && <nav className="navigation navigation--admin" aria-label="Equipe Otimiza"><p className="navigation__title"><ShieldCheck size={13}/><span>EQUIPE OTIMIZA</span></p>{adminNavItems.map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'is-active' : ''} type="button" aria-current={page === id ? 'page' : undefined} onClick={() => { setPage(id); setMobileMenuOpen(false) }}><Icon size={19}/><span>{label}</span></button>)}</nav>}
         <div className="sidebar-bottom"><button className="automation-status" type="button" onClick={() => { setPage(account.plan === 'chatbot' ? 'chatbot' : 'configuracoes'); setMobileMenuOpen(false) }}><span className="bot-orb"><Bot size={17}/></span><span><b>{account.plan === 'chatbot' ? 'Configurar chatbot' : 'Conectar WhatsApp'}</b><small>{account.plan === 'chatbot' ? 'Respostas por número' : 'Gerenciar integrações'}</small></span><ChevronRight size={16}/></button><button className={page === 'configuracoes' ? 'is-active' : ''} type="button" onClick={() => { setPage('configuracoes'); setMobileMenuOpen(false) }}><Settings2 size={19}/><span>Configurações</span></button><div className="profile"><Avatar initials={initialsFor(account.name)}/><span><b>{account.name}</b><small>{account.role === 'owner' ? 'Administrador' : account.role}</small></span><ChevronDown size={15}/></div></div>
       </aside>
-      <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : [...workspaceNavItems, ...adminNavItems].find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header><div className="content-scroll">{renderContent()}</div></main>
+      <main className="main-content"><header className="topbar"><div className="crumb"><button className="mobile-menu-toggle" type="button" aria-label="Abrir menu" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button><span>Otimiza AI</span><ChevronRight size={15}/><b>{page === 'crm' ? 'CRM' : page === 'dashboard' ? 'Dashboard' : [...workspaceNavItems, ...adminNavItems].find((item) => item.id === page)?.label ?? 'Configurações'}</b></div><div className="topbar-actions">{syncError && <span className="sync-error">{syncError}</span>}<button className="help-chip" type="button" onClick={() => setShowHelp(true)}><Sparkles size={15}/> Central de ajuda</button><button className="session-button" type="button" onClick={signOut}>Sair</button><button className="notification-button" type="button" aria-label="Notificações" onClick={() => setShowNotifications((value) => !value)}><Bell size={19}/>{notifications.length > 0 && <i/>}</button>{showNotifications && <NotificationsPanel notifications={notifications} onClose={() => setShowNotifications(false)} onNavigate={setPage}/>}</div></header>{downChannels.length > 0 && page !== 'configuracoes' && <div className="channel-banner" role="alert"><CircleAlert size={18} aria-hidden="true"/><p><b>{downChannels.length === 1 ? `O WhatsApp ${downChannels[0].channelName ?? ''} está desconectado.` : `${downChannels.length} números de WhatsApp estão desconectados.`}</b> Enquanto isso, as mensagens novas não chegam ao CRM nem ao chatbot.</p><button type="button" onClick={() => setPage('configuracoes')}>Reconectar</button></div>}<div className="content-scroll">{renderContent()}</div></main>
       {chatLead?.phone && session && page === 'crm' && <ChatDrawer session={session} name={chatLead.name} phone={chatLead.phone} botEnabled={account?.plan === 'chatbot'} onClose={() => setChatLead(null)} />}
       {selectedLead && <><button className="drawer-backdrop" onClick={() => { setSelectedLead(null); setShowSaleForm(false) }} aria-label="Fechar detalhes" type="button"/><LeadDrawer lead={selectedLead} session={session} onClose={() => { setSelectedLead(null); setShowSaleForm(false) }} onAdvance={advanceLead} onRegisterSale={() => setShowSaleForm(true)} onOpenChat={selectedLead.phone ? () => { openLeadChat(selectedLead); setSelectedLead(null) } : undefined} onResolveRequest={async (requestId) => { if (!session) throw new Error('Entre no CRM para continuar.'); await api.resolveLeadRequest(session, requestId); setSelectedLead((lead) => lead ? { ...lead, requests: (lead.requests ?? []).filter((request) => request.id !== requestId) } : lead); await loadWorkspace(session) }} onSourceSaved={async (source) => { if (!session || !selectedLead.opportunityId) throw new Error('Lead ainda não sincronizado.'); await api.updateOpportunity(session, selectedLead.opportunityId, { source }); setSelectedLead((lead) => lead ? { ...lead, source } : lead); await loadWorkspace(session) }}/></>}
       {showAccess && <AccessModal onClose={() => setShowAccess(false)} onAuthenticated={authenticateSession}/>} {showHelp && <HelpCenter onClose={() => setShowHelp(false)} onNavigate={setPage}/>} {showOnboarding && <Onboarding account={account} onClose={() => setShowOnboarding(false)} onNavigate={setPage}/>} {showLeadForm && <LeadForm session={session} onClose={() => setShowLeadForm(false)} onSave={createLead}/>}

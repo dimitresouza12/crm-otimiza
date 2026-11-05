@@ -1384,7 +1384,7 @@ app.get('/api/notifications', { preHandler: authenticate }, async (request, repl
        WHERE o.company_id = $1 AND ps.kind = 'open' AND o.last_activity_at < now() - interval '24 hours' ORDER BY o.last_activity_at ASC LIMIT 8`, [scope.companyId]),
   ])
   const notifications = [
-    ...channels.rows.map((channel) => ({ id: `channel-${channel.id}`, type: 'channel', title: `${channel.name} precisa de atenção`, body: channel.status === 'connected' ? 'O número está há mais de 24 horas sem novos eventos.' : 'O canal está desconectado ou apresentou erro.', action: 'Abrir configurações' })),
+    ...channels.rows.map((channel) => ({ id: `channel-${channel.id}`, type: 'channel', title: `${channel.name} precisa de atenção`, body: channel.status === 'connected' ? 'O número está há mais de 24 horas sem novos eventos.' : 'O canal está desconectado ou apresentou erro.', action: 'Abrir configurações', level: channel.status === 'connected' ? 'quiet' as const : 'down' as const, channelName: channel.name })),
     ...leads.rows.map((lead) => ({ id: `lead-${lead.id}`, type: 'lead', title: `${lead.name ?? lead.title} está sem retorno`, body: 'Este lead permanece em uma etapa aberta há mais de 24 horas.', action: 'Abrir CRM' })),
   ]
   if (scope.accessState === 'trial' && scope.trialEndsAt) {
