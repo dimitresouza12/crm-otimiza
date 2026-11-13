@@ -3,7 +3,9 @@ import type { LeadAnalysis } from './openai.js'
 export type StageInfo = { id: string; name: string; position: number; kind: 'open' | 'won' | 'lost' }
 export type Current = { stage: StageInfo; temperature: string; value: number | null; source: string | null; locked: boolean }
 
-export const minConfidence = 0.6
+export const minConfidence = 0.7
+// Dar uma venda como fechada é a decisão mais séria: só com certeza alta.
+export const minWonConfidence = 0.85
 
 export type Decision = {
   stage?: StageInfo
@@ -16,13 +18,16 @@ export type Decision = {
 const genericSources = new Set(['', 'whatsapp', 'automação', 'automacao'])
 
 // Regra pura: decide o que a IA pode aplicar. Só avança etapas, respeita ajustes manuais e nunca confirma faturamento.
-export const decide = (analysis: LeadAnalysis, current: Current, stages: StageInfo[]): Decision => {
+export const decide = (originalAnalysis: LeadAnalysis, current: Current, stages: StageInfo[]): Decision => {
+  let analysis = originalAnalysis
   const decision: Decision = {}
   if (analysis.confidence < minConfidence) return decision
   const open = stages.filter((stage) => stage.kind === 'open').sort((a, b) => a.position - b.position)
   const lost = stages.find((stage) => stage.kind === 'lost')
   const canChange = current.stage.kind === 'open' && !current.locked
 
+  // Sem certeza alta, "venda fechada" vira apenas conversa em andamento.
+  if (analysis.deal === 'won' && analysis.confidence < minWonConfidence) analysis = { ...analysis, deal: 'none' }
   const dealAmount = analysis.deal === 'won' ? Number(analysis.deal_amount ?? analysis.estimated_value ?? 0) : 0
   if (analysis.deal === 'won' && dealAmount > 0) decision.sale = { amount: dealAmount }
 

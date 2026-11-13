@@ -16,7 +16,7 @@ import { decryptSecret, encryptSecret } from './crypto.js'
 import { availableAtFor, balanceOf, canRequestPayout, commissionEffectFor, commissionFor, isValidCode, isValidNickname, maskCompanyName, maskPixKey, normalizePixKey, pixKeyTypes, rankingOf, slugifyCode, type PixKeyType } from './affiliates.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isRepeatedReply, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
+import { botGate, chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isRepeatedReply, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
 import { aiEnabledFor, catchUpAnalyses, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
@@ -2107,7 +2107,7 @@ const saveWhatsAppMessage = async (connection: { id: string; company_id: string;
     [connection.company_id, conversation.rows[0].id, externalId, fromMe ? 'outbound' : 'inbound', messageType, body, sentAt, JSON.stringify(payload), fromMe ? null : 'customer', fromMe ? 'sent' : null, quotedExternalId, quotedText?.slice(0, 500) ?? null, quotedFrom],
   )
   if (insertedMessage.rows[0]) publishChat(connection.company_id, conversation.rows[0].id)
-  return { inbound: !fromMe, isNew: Boolean(insertedMessage.rows[0]), body, phone, conversationId: conversation.rows[0].id, messageId: insertedMessage.rows[0]?.id ?? null, externalId, messageType, data }
+  return { inbound: !fromMe, isNew: Boolean(insertedMessage.rows[0]), body, phone, conversationId: conversation.rows[0].id, messageId: insertedMessage.rows[0]?.id ?? null, externalId, messageType, data, sentAt }
 }
 
 const uploadsDir = resolve(process.env.UPLOADS_DIR ?? join(process.cwd(), 'uploads'))
@@ -2202,7 +2202,22 @@ const noteCustomerRequest = async (companyId: string, conversationId: string, te
 
 const unheardAudioReply ='Recebi seu áudio, mas não consegui ouvi-lo agora 😕 Pode escrever sua dúvida em texto, por favor?'
 
-const sendChatbotResponse = async (connection: { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }, incoming: { body: string | null; phone: string; conversationId: string; unheardAudio?: boolean }) => {
+type BotConnection = { id: string; company_id: string; channel_id: string; provider: string; external_account_id?: string | null; access_token_encrypted: string | null; metadata: unknown }
+type BotIncoming = { body: string | null; phone: string; conversationId: string; unheardAudio?: boolean; messageType?: string; sentAt?: Date; receivedAt?: Date }
+
+// Uma conversa por vez: duas mensagens que chegam juntas não geram duas respostas ao mesmo tempo.
+const botLocks = new Map<string, Promise<void>>()
+const sendChatbotResponse = async (connection: BotConnection, incoming: BotIncoming) => {
+  const receivedAt = incoming.receivedAt ?? new Date()
+  const gate = botGate({ messageType: incoming.messageType ?? 'conversation', body: incoming.body, sentAt: incoming.sentAt ?? receivedAt })
+  if (!gate.answer) { app.log.info({ connectionId: connection.id, reason: gate.reason, messageType: incoming.messageType }, 'Chatbot não responde a esta mensagem'); return }
+  const previous = botLocks.get(incoming.conversationId) ?? Promise.resolve()
+  const turn = previous.catch(() => undefined).then(() => answerWithChatbot(connection, incoming, receivedAt, gate.allowFallback))
+  botLocks.set(incoming.conversationId, turn)
+  try { await turn } finally { if (botLocks.get(incoming.conversationId) === turn) botLocks.delete(incoming.conversationId) }
+}
+
+const answerWithChatbot = async (connection: BotConnection, incoming: BotIncoming, receivedAt: Date, allowFallback: boolean) => {
   const metadata = record(connection.metadata)
   const serverUrl = typeof metadata.serverUrl === 'string' ? metadata.serverUrl.replace(/\/$/, '') : ''
   if (!connection.access_token_encrypted) return
@@ -2212,6 +2227,9 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
   if (!settings.is_active) return
   const paused = await query<{ paused: boolean }>(`SELECT (bot_paused_until IS NOT NULL AND bot_paused_until > now()) AS paused FROM conversations WHERE id = $1`, [incoming.conversationId])
   if (paused.rows[0]?.paused) return
+  // Se o bot (ou uma pessoa, pelo CRM) já respondeu depois que esta mensagem chegou, não responde de novo.
+  const answeredSince = await query(`SELECT 1 FROM messages WHERE conversation_id = $1 AND direction = 'outbound' AND created_at >= $2 LIMIT 1`, [incoming.conversationId, receivedAt])
+  if (answeredSince.rowCount) return
   const hasLocations = (settings.locations ?? []).length > 0
   const [{ rows: countRows }, rules, ownChannel, sentLocations] = await Promise.all([
     query<{ total: string }>(`SELECT count(*)::text AS total FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`, [incoming.conversationId]),
@@ -2231,6 +2249,8 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
   // Áudio que não pôde ser transcrito não é "frase sem sentido": pede o texto, em vez de mandar o "não entendi".
   const choice: { text: string; ruleId?: string; locationIds?: string[] } | null = normalChoice && incoming.unheardAudio ? { text: unheardAudioReply } : normalChoice
   if (!choice) return
+  // Foto, vídeo, documento ou localização sem texto não merece um "não entendi".
+  if (!allowFallback && normalChoice?.source === 'fallback') return
   // Não repete a mesma resposta (aviso de fora do horário, "não entendi", "recebi seu áudio"...) para quem manda várias mensagens seguidas.
   const replySource = incoming.unheardAudio ? 'fallback' : normalChoice?.source ?? 'fallback'
   const recentBot = await query<{ body: string | null; sent_at: string }>(`SELECT body, sent_at FROM messages WHERE conversation_id = $1 AND sent_by = 'bot' AND sent_at > now() - interval '6 hours' ORDER BY sent_at DESC LIMIT 20`, [incoming.conversationId])
@@ -2411,10 +2431,11 @@ app.post('/webhooks/evolution/:connectionId', { config: { logLevel: 'warn' } }, 
         const media = attachInboundMedia(connection, incoming).catch((error) => { app.log.error({ err: error, connectionId: connection.id }, 'Falha ao baixar mídia Evolution'); return null })
         if (!incoming.inbound) void handleHumanOnPhone(connection.company_id, incoming).catch((error) => app.log.error({ err: error }, 'Falha ao pausar o chatbot'))
         if (incoming.inbound) {
+          const receivedAt = new Date()
           void (async () => {
             const body = incoming.body ?? (isAudio ? await media : null)
             await noteCustomerRequest(connection.company_id, incoming.conversationId, body).catch((error) => app.log.error({ err: error }, 'Falha ao registrar pedido do cliente'))
-            await sendChatbotResponse(connection, { ...incoming, body, unheardAudio: isAudio && !body })
+            await sendChatbotResponse(connection, { ...incoming, body, unheardAudio: isAudio && !body, receivedAt })
           })().catch((error) => app.log.error({ err: error, connectionId: connection.id }, 'Falha no chatbot Evolution'))
         }
         void media.finally(() => scheduleAnalysis(incoming.conversationId, (error) => app.log.error({ err: error }, 'Falha na análise por IA')))

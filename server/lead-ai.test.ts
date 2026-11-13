@@ -68,3 +68,12 @@ test('valida e normaliza a resposta do GPT', () => {
   assert.equal(parsed?.estimated_value, 120.5)
   assert.equal(parsed?.temperature, 'hot')
 })
+
+test('venda fechada só com certeza alta; antes disso é conversa em andamento', () => {
+  const wonUnsure = decide(analysis({ deal: 'won', deal_amount: 500, confidence: 0.8 }), base, stages)
+  assert.equal(wonUnsure.sale, undefined)
+  const wonSure = decide(analysis({ deal: 'won', deal_amount: 500, confidence: 0.9 }), base, stages)
+  assert.deepEqual(wonSure.sale, { amount: 500 })
+  // abaixo de 0,7 nada muda
+  assert.deepEqual(decide(analysis({ stage: 'Negociação', temperature: 'hot', confidence: 0.65 }), base, stages), {})
+})

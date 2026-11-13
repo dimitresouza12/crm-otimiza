@@ -122,6 +122,8 @@ export const analyzeConversation = async (input: AnalysisInput) => {
   const system = [
     'Você analisa conversas de WhatsApp entre uma empresa brasileira e um cliente para organizar um CRM de vendas.',
     'Responda apenas o JSON pedido, em português. Use somente o que está escrito na conversa; nunca invente valores.',
+    'As linhas "Chatbot:" são respostas automáticas padrão (boas-vindas, aviso de fora do horário, "não entendi"): NÃO são prova de interesse, de preço combinado nem de fechamento. Baseie-se no que o Cliente e o Atendente humano disseram.',
+    'Se o cliente só cumprimentou, mandou mensagem fora do horário, figurinha ou áudio sem transcrição, não avance a etapa e use deal "none". Na dúvida, mantenha a etapa atual e dê confidence baixa.',
     `Etapas abertas do funil, da primeira à última: ${input.stages.join(' > ')}.`,
     'stage: a etapa aberta que melhor descreve o momento atual do cliente, ou null se não houver informação.',
     'temperature: new (sem interesse claro), warm (interessado) ou hot (pronto para comprar).',

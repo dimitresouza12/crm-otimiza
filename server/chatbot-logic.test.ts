@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, internationalPhone, isRepeatedReply, isWithinBusinessHours, periodsOf, samePhone, scheduleReplies, splitKeywords, wantsHuman, whatsappLink, type BotLocation, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, botGate, internationalPhone, isRepeatedReply, isWithinBusinessHours, periodsOf, samePhone, scheduleReplies, splitKeywords, wantsHuman, whatsappLink, type BotLocation, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -329,4 +329,22 @@ test('o bot não repete a mesma resposta: aviso de fora do horário 1x por 6h, a
   assert.equal(isRepeatedReply('Olá!  Tudo bem?', 'welcome', [{ body: 'Olá! Tudo bem?', sent_at: ago(1) }], now), true)
   assert.equal(isRepeatedReply('Nossos valores:', 'price', [{ body: 'Outra coisa', sent_at: ago(1) }], now), false)
   assert.equal(isRepeatedReply(text, 'off_hours', [], now), false)
+})
+
+test('porteiro do bot: só responde ao que o cliente acabou de escrever', () => {
+  const now = new Date('2026-11-13T12:00:00Z')
+  const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000)
+  // mensagem nova de texto: responde
+  assert.deepEqual(botGate({ messageType: 'conversation', body: 'oi', sentAt: ago(1), now }), { answer: true, allowFallback: true })
+  // histórico sincronizado / celular que ficou sem internet: não responde a algo de 34 horas atrás nem de 11 minutos
+  assert.equal(botGate({ messageType: 'conversation', body: 'oi', sentAt: ago(34 * 60), now }).answer, false)
+  assert.equal(botGate({ messageType: 'conversation', body: 'oi', sentAt: ago(11), now }).reason, 'old_message')
+  assert.equal(botGate({ messageType: 'conversation', body: 'oi', sentAt: ago(9), now }).answer, true)
+  // reação, figurinha, mensagem apagada ou editada não são perguntas
+  for (const type of ['reactionMessage', 'stickerMessage', 'protocolMessage', 'editedMessage', 'pollUpdateMessage']) assert.equal(botGate({ messageType: type, body: null, sentAt: ago(0), now }).answer, false, type)
+  // foto sem texto: responde boas-vindas/fora do horário, mas nunca o "não entendi"
+  assert.deepEqual(botGate({ messageType: 'imageMessage', body: null, sentAt: ago(0), now }), { answer: true, allowFallback: false })
+  assert.equal(botGate({ messageType: 'imageMessage', body: 'quanto custa isso?', sentAt: ago(0), now }).allowFallback, true)
+  // áudio segue o caminho normal (transcrição ou pedido de texto)
+  assert.equal(botGate({ messageType: 'audioMessage', body: null, sentAt: ago(0), now }).allowFallback, true)
 })

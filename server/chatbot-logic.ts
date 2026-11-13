@@ -147,6 +147,22 @@ export const internationalPhone = (value: string) => {
 export const whatsappLink = (phone: string, text: string) => `https://wa.me/${internationalPhone(phone)}?text=${encodeURIComponent(text)}`
 
 export const defaultLocationMessage = 'Para atender você em {cidade}, é só chamar a nossa equipe local por este link: {link}'
+// Porteiro do bot: decide se esta mensagem merece resposta automática. Só responde ao que o cliente acabou de escrever.
+export const botMaxMessageAgeMs = 10 * 60_000
+const silentTypes = new Set(['reactionmessage', 'protocolmessage', 'senderkeydistributionmessage', 'pollupdatemessage', 'editedmessage', 'keepinchatmessage', 'stickermessage', 'sticker', 'messagecontextinfo', 'reaction', 'protocol', 'edited'])
+const mediaWithoutText = new Set(['imagemessage', 'image', 'videomessage', 'video', 'documentmessage', 'document', 'documentwithcaptionmessage', 'locationmessage', 'location', 'contactmessage', 'contact', 'contactsarraymessage', 'livelocationmessage'])
+export type BotGate = { answer: boolean; reason?: 'old_message' | 'not_a_message'; allowFallback: boolean }
+export const botGate = (input: { messageType: string; body: string | null; sentAt: Date; now?: Date }): BotGate => {
+  const now = input.now ?? new Date()
+  const type = input.messageType.trim().toLowerCase()
+  // Mensagem velha (histórico sincronizado depois de uma reconexão, celular que ficou sem internet): responder agora não faz sentido.
+  if (now.getTime() - input.sentAt.getTime() > botMaxMessageAgeMs) return { answer: false, reason: 'old_message', allowFallback: false }
+  // Reação, figurinha, mensagem apagada ou editada não são perguntas.
+  if (silentTypes.has(type)) return { answer: false, reason: 'not_a_message', allowFallback: false }
+  // Foto, vídeo, documento ou localização sem texto: vale a boas-vindas e o aviso de fora do horário, mas não o "não entendi".
+  return { answer: true, allowFallback: !(mediaWithoutText.has(type) && !input.body?.trim()) }
+}
+
 // O bot responde a cada mensagem; sem freio, quem manda três mensagens seguidas recebe o mesmo aviso três vezes.
 // Texto idêntico ao que o bot já mandou na conversa não sai de novo dentro da janela: 6 horas para o aviso de fora do horário
 // (uma vez por "madrugada"), 30 minutos para as demais respostas.
