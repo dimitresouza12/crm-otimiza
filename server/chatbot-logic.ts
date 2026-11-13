@@ -147,7 +147,18 @@ export const internationalPhone = (value: string) => {
 export const whatsappLink = (phone: string, text: string) => `https://wa.me/${internationalPhone(phone)}?text=${encodeURIComponent(text)}`
 
 export const defaultLocationMessage = 'Para atender você em {cidade}, é só chamar a nossa equipe local por este link: {link}'
-export const cityQuestion = 'Em qual cidade você está? 📍'
+// O bot responde a cada mensagem; sem freio, quem manda três mensagens seguidas recebe o mesmo aviso três vezes.
+// Texto idêntico ao que o bot já mandou na conversa não sai de novo dentro da janela: 6 horas para o aviso de fora do horário
+// (uma vez por "madrugada"), 30 minutos para as demais respostas.
+const repeatWindowMs = { off_hours: 6 * 3_600_000, other: 30 * 60_000 }
+export const repeatWindowFor = (source: BotReply['source']) => source === 'off_hours' ? repeatWindowMs.off_hours : repeatWindowMs.other
+export const isRepeatedReply = (text: string, source: BotReply['source'], recentBot: Array<{ body: string | null; sent_at: string | Date }>, now: Date = new Date()) => {
+  const window = repeatWindowFor(source)
+  const same = (value: string | null) => (value ?? '').replace(/\s+/g, ' ').trim() === text.replace(/\s+/g, ' ').trim()
+  return recentBot.some((message) => same(message.body) && now.getTime() - new Date(message.sent_at).getTime() < window)
+}
+
+export const cityQuestion ='Em qual cidade você está? 📍'
 
 // Cidades (ou apelidos/bairros) citadas na mensagem, na ordem em que aparecem. Palavra inteira, sem acento nem maiúsculas.
 export const matchLocations = (foldedText: string, locations: BotLocation[]) => {

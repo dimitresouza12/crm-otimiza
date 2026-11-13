@@ -13,15 +13,29 @@ const baseUrl = () => (process.env.OPENAI_BASE_URL?.trim() || 'https://api.opena
 const authorized = async (path: string, init: RequestInit, timeoutMs: number) => {
   const key = process.env.OPENAI_API_KEY?.trim()
   if (!key) throw new OpenAIError(503, 'A chave da OpenAI não foi configurada no servidor.')
+  if (openaiPaused()) throw new OpenAIError(429, 'A OpenAI está em pausa depois de recusar por limite ou saldo.')
   let response: Response
   try {
     response = await fetch(`${baseUrl()}${path}`, { ...init, headers: { ...init.headers, Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(timeoutMs) })
   } catch {
     throw new OpenAIError(502, 'Não foi possível alcançar a OpenAI.')
   }
-  if (!response.ok) throw new OpenAIError(response.status, `A OpenAI respondeu com erro ${response.status}.`)
+  if (!response.ok) {
+    // O corpo diz se é limite por minuto ou saldo/cota esgotados: sem isso o log só mostra "429".
+    const detail = await response.json().catch(() => ({})) as { error?: { code?: unknown; type?: unknown } }
+    const code = String(detail.error?.code ?? detail.error?.type ?? '').slice(0, 60)
+    if (response.status === 429) pauseAfterLimit(code)
+    throw new OpenAIError(response.status, `A OpenAI respondeu com erro ${response.status}${code ? ` (${code})` : ''}.`)
+  }
   return response
 }
+
+// Depois de um 429 a OpenAI continuaria recusando: espera um pouco em vez de repetir a chamada a cada mensagem e encher o log.
+// Cota esgotada só se resolve com saldo, então a pausa é maior; limite por minuto volta logo.
+let pausedUntil = 0
+const pauseAfterLimit = (code: string) => { pausedUntil = Date.now() + (code === 'insufficient_quota' ? 10 * 60_000 : 60_000) }
+export const openaiPaused = () => Date.now() < pausedUntil
+export const resetOpenaiPause = () => { pausedUntil = 0 }
 
 const backupTranscribeModel = 'whisper-1'
 

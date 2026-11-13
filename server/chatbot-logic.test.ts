@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, internationalPhone, isWithinBusinessHours, periodsOf, samePhone, scheduleReplies, splitKeywords, wantsHuman, whatsappLink, type BotLocation, type BotRule, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, containsKeyword, defaultBusinessHours, detectMeetingRequest, humanReply, internationalPhone, isRepeatedReply, isWithinBusinessHours, periodsOf, samePhone, scheduleReplies, splitKeywords, wantsHuman, whatsappLink, type BotLocation, type BotRule, type BotSettings } from './chatbot-logic.js'
 
 const settings: BotSettings = {
   is_active: true,
@@ -314,4 +314,19 @@ test('entre dois assuntos vence o de palavra mais específica', () => {
   ]
   assert.equal(chooseBotReply({ settings, rules: topics, text: 'tem horário disponível sexta?', isFirstMessage: false, now: open })?.ruleId, 'booking')
   assert.equal(chooseBotReply({ settings, rules: topics, text: 'qual o horário?', isFirstMessage: false, now: open })?.ruleId, 'hours')
+})
+
+test('o bot não repete a mesma resposta: aviso de fora do horário 1x por 6h, as demais 30 min', () => {
+  const now = new Date('2026-11-13T07:00:00Z')
+  const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString()
+  const text = 'Estamos fechados agora, voltamos amanhã.'
+  assert.equal(isRepeatedReply(text, 'off_hours', [{ body: text, sent_at: ago(2) }], now), true)
+  assert.equal(isRepeatedReply(text, 'off_hours', [{ body: text, sent_at: ago(300) }], now), true)
+  assert.equal(isRepeatedReply(text, 'off_hours', [{ body: text, sent_at: ago(400) }], now), false)
+  assert.equal(isRepeatedReply('Não entendi sua mensagem', 'fallback', [{ body: 'Não entendi sua mensagem', sent_at: ago(10) }], now), true)
+  assert.equal(isRepeatedReply('Não entendi sua mensagem', 'fallback', [{ body: 'Não entendi sua mensagem', sent_at: ago(45) }], now), false)
+  // texto diferente, espaços e quebras de linha a mais não escapam da regra
+  assert.equal(isRepeatedReply('Olá!  Tudo bem?', 'welcome', [{ body: 'Olá! Tudo bem?', sent_at: ago(1) }], now), true)
+  assert.equal(isRepeatedReply('Nossos valores:', 'price', [{ body: 'Outra coisa', sent_at: ago(1) }], now), false)
+  assert.equal(isRepeatedReply(text, 'off_hours', [], now), false)
 })

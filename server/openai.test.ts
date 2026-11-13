@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
-import { OpenAIError, transcribeAudio } from './openai.js'
+import { OpenAIError, openaiPaused, resetOpenaiPause, transcribeAudio } from './openai.js'
 
 // Servidor de mentira da OpenAI: devolve o status configurado para cada modelo pedido.
 const withFakeOpenAI = async (answers: Record<string, { status: number; text?: string }>, run: (requested: string[]) => Promise<void>) => {
@@ -22,6 +22,7 @@ const withFakeOpenAI = async (answers: Record<string, { status: number; text?: s
   process.env.OPENAI_API_KEY = 'sk-teste'
   process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`
   delete process.env.OPENAI_TRANSCRIBE_MODEL
+  resetOpenaiPause()
   try { await run(requested) } finally {
     server.close()
     for (const [name, value] of [['OPENAI_API_KEY', before.key], ['OPENAI_BASE_URL', before.base], ['OPENAI_TRANSCRIBE_MODEL', before.model]] as const) {
@@ -63,4 +64,15 @@ test('áudio sem fala (texto vazio) devolve null', async () => {
   await withFakeOpenAI({ 'gpt-4o-mini-transcribe': { status: 200, text: '   ' } }, async () => {
     assert.equal(await transcribeAudio(audio, 'audio/ogg', 'a.ogg'), null)
   })
+})
+
+test('depois de um 429 a OpenAI fica em pausa e o erro mostra o motivo', async () => {
+  await withFakeOpenAI({ 'gpt-4o-mini-transcribe': { status: 429 } }, async (requested) => {
+    await assert.rejects(() => transcribeAudio(audio, 'audio/ogg', 'a.ogg'), (error) => error instanceof OpenAIError && error.status === 429)
+    assert.equal(openaiPaused(), true)
+    // em pausa: nem chega a chamar a OpenAI de novo
+    await assert.rejects(() => transcribeAudio(audio, 'audio/ogg', 'b.ogg'), (error) => error instanceof OpenAIError && error.status === 429)
+    assert.equal(requested.length, 1)
+  })
+  resetOpenaiPause()
 })

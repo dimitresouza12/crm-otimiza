@@ -1,6 +1,6 @@
 import { query, transaction } from './db.js'
 import { decide, type Current, type StageInfo } from './lead-decision.js'
-import { analyzeConversation, openaiConfigured } from './openai.js'
+import { analyzeConversation, openaiConfigured, openaiPaused } from './openai.js'
 
 const authorLabel = (message: { direction: string; sent_by: string | null }) =>
   message.direction === 'inbound' ? 'Cliente' : message.sent_by === 'bot' ? 'Chatbot' : 'Atendente'
@@ -90,6 +90,30 @@ export const runAnalysis = async (conversationId: string) => {
     }
   })
   return { analysis, applied }
+}
+
+// Conversas que receberam mensagem depois da última análise (a OpenAI caiu, o servidor reiniciou...) são analisadas aos poucos,
+// da mais recente para a mais antiga, para os cards não ficarem parados em "Novos leads" depois de uma falha.
+const triedAt = new Map<string, number>()
+export const catchUpAnalyses = async (onError: (error: unknown) => void, batch = 5) => {
+  if (!openaiConfigured() || openaiPaused()) return 0
+  const { rows } = await query<{ id: string }>(
+    `SELECT cv.id FROM conversations cv JOIN companies c ON c.id = cv.company_id LEFT JOIN chatbot_settings s ON s.company_id = c.id
+     WHERE c.plan = 'chatbot' AND COALESCE(s.ai_enabled, true) AND cv.last_message_at > now() - interval '3 days'
+       AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = cv.id AND m.direction = 'inbound' AND (m.body IS NOT NULL OR m.transcript IS NOT NULL))
+       AND EXISTS (SELECT 1 FROM opportunities o WHERE o.company_id = cv.company_id AND o.contact_id = cv.contact_id
+                   AND (o.ai_summary_at IS NULL OR o.ai_summary_at < cv.last_message_at - interval '2 minutes'))
+     ORDER BY cv.last_message_at DESC LIMIT 60`)
+  const now = Date.now()
+  let done = 0
+  for (const { id } of rows) {
+    if (done >= batch || openaiPaused()) break
+    if (now - (triedAt.get(id) ?? 0) < 2 * 3_600_000) continue
+    triedAt.set(id, now)
+    done++
+    await runAnalysis(id).catch(onError)
+  }
+  return done
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>()

@@ -16,9 +16,9 @@ import { decryptSecret, encryptSecret } from './crypto.js'
 import { availableAtFor, balanceOf, canRequestPayout, commissionEffectFor, commissionFor, isValidCode, isValidNickname, maskCompanyName, maskPixKey, normalizePixKey, pixKeyTypes, rankingOf, slugifyCode, type PixKeyType } from './affiliates.js'
 import { pool, query, transaction } from './db.js'
 import { createEvolutionInstance, evolutionConfigured, evolutionLogout, evolutionMediaBase64, evolutionMessageId, evolutionQr, evolutionSendAudio, evolutionSendMedia, evolutionSendText, evolutionState, EvolutionError, setEvolutionWebhook } from './evolution.js'
-import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
+import { chooseBotReply, defaultBusinessHours, detectMeetingRequest, internationalPhone, isRepeatedReply, isWithinBusinessHours, splitKeywords, wantsHuman, type BotSettings } from './chatbot-logic.js'
 import { pickText } from './message-text.js'
-import { aiEnabledFor, scheduleAnalysis } from './lead-ai.js'
+import { aiEnabledFor, catchUpAnalyses, scheduleAnalysis } from './lead-ai.js'
 import { publishChat, subscribeCompany } from './events.js'
 import { openaiConfigured, transcribeAudio } from './openai.js'
 import { calculatePlanPrice, isPurchasablePlan } from './pricing.js'
@@ -2231,6 +2231,10 @@ const sendChatbotResponse = async (connection: { id: string; company_id: string;
   // Áudio que não pôde ser transcrito não é "frase sem sentido": pede o texto, em vez de mandar o "não entendi".
   const choice: { text: string; ruleId?: string; locationIds?: string[] } | null = normalChoice && incoming.unheardAudio ? { text: unheardAudioReply } : normalChoice
   if (!choice) return
+  // Não repete a mesma resposta (aviso de fora do horário, "não entendi", "recebi seu áudio"...) para quem manda várias mensagens seguidas.
+  const replySource = incoming.unheardAudio ? 'fallback' : normalChoice?.source ?? 'fallback'
+  const recentBot = await query<{ body: string | null; sent_at: string }>(`SELECT body, sent_at FROM messages WHERE conversation_id = $1 AND sent_by = 'bot' AND sent_at > now() - interval '6 hours' ORDER BY sent_at DESC LIMIT 20`, [incoming.conversationId])
+  if (isRepeatedReply(choice.text, replySource, recentBot.rows)) return
   const responseText = choice.text
   const rule = choice.ruleId ? { id: choice.ruleId } : undefined
   let sentExternalId: string | null = null
@@ -2664,3 +2668,7 @@ process.on('SIGINT', close)
 process.on('SIGTERM', close)
 
 await app.listen({ port: config.port, host: '0.0.0.0' })
+
+// A cada 10 minutos, recupera a qualificação de conversas que ficaram sem análise (ex.: OpenAI fora do ar).
+const catchUpTimer = setInterval(() => { void catchUpAnalyses((error) => app.log.error({ err: error }, 'Falha na análise por IA (recuperação)')).catch((error) => app.log.error({ err: error }, 'Falha na recuperação das análises')) }, 10 * 60_000)
+catchUpTimer.unref()
